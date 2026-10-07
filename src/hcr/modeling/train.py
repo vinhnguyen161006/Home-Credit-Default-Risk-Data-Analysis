@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import polars as pl
     from sklearn.pipeline import Pipeline
 
@@ -85,7 +86,7 @@ class TrainingResult:
     auc_mean: float
     auc_std: float
     auc_spread: float
-    oof_predictions: np.ndarray
+    oof_predictions: npt.NDArray[np.float64]
     feature_importance: dict[str, float]
     mlflow_run_id: str
 
@@ -119,7 +120,7 @@ def train_single_fold(
     valid_frame: pl.DataFrame,
     valid_labels: pl.Series,
     fold_index: int,
-) -> tuple[FoldResult, np.ndarray]:
+) -> tuple[FoldResult, npt.NDArray[np.float64]]:
     """Fit one fold and return its metrics and validation predictions.
 
     Returns:

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import polars as pl
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ def compute_shap_values(
     frame: pl.DataFrame,
     sample_rows: int,
     seed: int,
-) -> np.ndarray:
+) -> npt.NDArray[np.float64]:
     """Compute SHAP values for a sample of applications.
 
     Args:

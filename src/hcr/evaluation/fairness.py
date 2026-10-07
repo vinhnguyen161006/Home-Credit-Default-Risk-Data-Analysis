@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import polars as pl
 
 logger = logging.getLogger(__name__)
@@ -84,8 +85,8 @@ def build_age_bands(ages: pl.Series) -> pl.Series:
 
 
 def measure_group(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
     threshold: float,
     attribute: str,
     group: str,
@@ -110,8 +111,8 @@ def measure_group(
 
 def measure_attribute(
     frame: pl.DataFrame,
-    probabilities: np.ndarray,
-    labels: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
     threshold: float,
     attribute: str,
 ) -> tuple[GroupMeasurement, ...]:

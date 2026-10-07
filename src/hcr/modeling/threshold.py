@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +73,9 @@ class DecileRow:
 
 
 def cost_at_threshold(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
-    credit_amounts: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
+    credit_amounts: npt.NDArray[np.float64],
     threshold: float,
     profit_margin: float,
     loss_given_default: float,
@@ -105,9 +106,9 @@ def cost_at_threshold(
 
 
 def search_threshold(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
-    credit_amounts: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
+    credit_amounts: npt.NDArray[np.float64],
     grid: dict[str, float],
     profit_margin: float,
     loss_given_default: float,
@@ -134,8 +135,8 @@ def search_threshold(
 
 
 def build_decile_table(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
 ) -> tuple[DecileRow, ...]:
     """Build the ten-row risk decile table.
 

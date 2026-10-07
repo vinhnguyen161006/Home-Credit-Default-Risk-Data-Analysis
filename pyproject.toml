@@ -99,7 +99,7 @@ warn_unreachable = true
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = ["duckdb.*", "lightgbm.*", "shap.*", "mlflow.*", "pandera.*", "pyodbc.*"]
+module = ["duckdb.*", "lightgbm.*", "shap.*", "mlflow.*", "pandera.*", "pyodbc.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

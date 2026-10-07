@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,9 @@ class MetricSet:
     positives: int
 
 
-def compute_metrics(probabilities: np.ndarray, labels: np.ndarray) -> MetricSet:
+def compute_metrics(
+    probabilities: npt.NDArray[np.float64], labels: npt.NDArray[np.int64]
+) -> MetricSet:
     """Compute every reported metric for one set of predictions.
 
     Args:
@@ -76,10 +79,10 @@ def compute_metrics(probabilities: np.ndarray, labels: np.ndarray) -> MetricSet:
 
 
 def decile_lift(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
     deciles: int = 10,
-) -> np.ndarray:
+) -> npt.NDArray[np.float64]:
     """Return the observed default rate per predicted-risk decile.
 
     TODO:
@@ -90,7 +93,7 @@ def decile_lift(
     raise NotImplementedError
 
 
-def calibration_gap(probabilities: np.ndarray, labels: np.ndarray) -> float:
+def calibration_gap(probabilities: npt.NDArray[np.float64], labels: npt.NDArray[np.int64]) -> float:
     """Return mean predicted probability minus observed default rate.
 
     The single number that says whether the model over- or under-states risk on a

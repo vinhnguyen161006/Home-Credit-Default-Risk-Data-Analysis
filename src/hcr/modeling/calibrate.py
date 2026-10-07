@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     from sklearn.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
@@ -86,9 +87,9 @@ def fit_calibrator(
 
 
 def verify_calibration(
-    probabilities_before: np.ndarray,
-    probabilities_after: np.ndarray,
-    labels: np.ndarray,
+    probabilities_before: npt.NDArray[np.float64],
+    probabilities_after: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
 ) -> CalibrationResult:
     """Confirm calibration improved the Brier score and left the ranking alone.
 
@@ -113,10 +114,10 @@ def verify_calibration(
 
 
 def reliability_curve(
-    probabilities: np.ndarray,
-    labels: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.int64],
     bins: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.int64]]:
     """Compute the reliability diagram points.
 
     Returns:

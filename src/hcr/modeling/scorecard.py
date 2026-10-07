@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +96,9 @@ def derive_parameters(
 
 
 def probability_to_score(
-    probabilities: np.ndarray,
+    probabilities: npt.NDArray[np.float64],
     parameters: ScorecardParameters,
-) -> np.ndarray:
+) -> npt.NDArray[np.float64]:
     """Apply the score transform to calibrated default probabilities.
 
     Returns:
@@ -118,7 +119,9 @@ def probability_to_score(
     raise NotImplementedError
 
 
-def assign_bands(scores: np.ndarray, bands: tuple[RiskBand, ...]) -> np.ndarray:
+def assign_bands(
+    scores: npt.NDArray[np.float64], bands: tuple[RiskBand, ...]
+) -> npt.NDArray[np.float64]:
     """Assign each score to a risk band key.
 
     Returns:
