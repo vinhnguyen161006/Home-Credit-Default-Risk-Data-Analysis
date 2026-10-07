@@ -1,0 +1,128 @@
+meta:
+  step: 2
+  purpose: Expected shape of every raw source table, asserted before any transform.
+  rationale: >-
+    Row and column counts come from the system specification. Any mismatch stops
+    the pipeline, because a changed source file invalidates every downstream
+    count and every number in the result document.
+
+tables:
+  application_train:
+    file: home-credit-default-risk/application_train.csv
+    rows: 307511
+    columns: 122
+    primary_key: [SK_ID_CURR]
+    required_columns:
+      - SK_ID_CURR
+      - TARGET
+      - AMT_CREDIT
+      - AMT_ANNUITY
+      - AMT_INCOME_TOTAL
+      - AMT_GOODS_PRICE
+      - CNT_FAM_MEMBERS
+      - DAYS_BIRTH
+      - DAYS_EMPLOYED
+      - CODE_GENDER
+      - ORGANIZATION_TYPE
+      - OCCUPATION_TYPE
+      - NAME_EDUCATION_TYPE
+      - NAME_CONTRACT_TYPE
+      - NAME_HOUSING_TYPE
+      - NAME_FAMILY_STATUS
+      - OWN_CAR_AGE
+      - EXT_SOURCE_1
+      - EXT_SOURCE_2
+      - EXT_SOURCE_3
+    dtypes:
+      SK_ID_CURR: int
+      TARGET: int
+      AMT_CREDIT: float
+      DAYS_BIRTH: int
+      CODE_GENDER: str
+
+  application_test:
+    file: home-credit-default-risk/application_test.csv
+    rows: 48744
+    columns: 121
+    primary_key: [SK_ID_CURR]
+    forbidden_columns: [TARGET]
+    note: >-
+      Unlabelled, so it supports no measurement. Every reported metric comes
+      from the holdout carved out of application_train.
+
+  bureau:
+    file: bureau.csv
+    rows: 1716428
+    columns: 17
+    primary_key: [SK_ID_BUREAU]
+    foreign_keys:
+      SK_ID_CURR: application_train.SK_ID_CURR
+    grain: one loan at another credit institution
+
+  bureau_balance:
+    file: bureau_balance.csv
+    rows: 27299925
+    columns: 3
+    primary_key: [SK_ID_BUREAU, MONTHS_BALANCE]
+    foreign_keys:
+      SK_ID_BUREAU: bureau.SK_ID_BUREAU
+    grain: one external loan times one month
+
+  previous_application:
+    file: previous_application.csv
+    rows: 1670214
+    columns: 37
+    primary_key: [SK_ID_PREV]
+    foreign_keys:
+      SK_ID_CURR: application_train.SK_ID_CURR
+    grain: one earlier application at Home Credit
+
+  pos_cash_balance:
+    file: POS_CASH_balance.csv
+    rows: 10001358
+    columns: 8
+    primary_key: [SK_ID_PREV, MONTHS_BALANCE]
+    foreign_keys:
+      SK_ID_PREV: previous_application.SK_ID_PREV
+    grain: one POS or cash contract times one month
+
+  installments_payments:
+    file: installments_payments.csv
+    rows: 13605401
+    columns: 8
+    primary_key: null
+    foreign_keys:
+      SK_ID_PREV: previous_application.SK_ID_PREV
+    grain: one instalment actually paid
+    note: >-
+      An event table, not a monthly table, and it has no natural primary key.
+      The uniqueness gate skips it. This is the one source that measures payment
+      delay per transaction.
+
+  credit_card_balance:
+    file: credit_card_balance.csv
+    rows: 3840312
+    columns: 23
+    primary_key: [SK_ID_PREV, MONTHS_BALANCE]
+    foreign_keys:
+      SK_ID_PREV: previous_application.SK_ID_PREV
+    grain: one credit card times one month
+
+expected_coverage:
+  rationale: >-
+    Coverage gaps the join logic must tolerate. Checked as warnings, never as
+    stops: they describe the data, they are not defects. They are the reason
+    every join is a LEFT JOIN from the parent table.
+  bureau_rows_with_balance: 817395
+  bureau_rows_total: 1716428
+  customers_with_bureau_history: 305811
+  total_customers: 307511
+
+target:
+  column: TARGET
+  positive_count: 24825
+  negative_count: 282686
+  positive_rate: 0.0807
+  note: >-
+    Roughly 11.4 negatives per positive. Accuracy is therefore banned as a
+    metric: predicting all zeros scores 91.93 percent while catching no default.

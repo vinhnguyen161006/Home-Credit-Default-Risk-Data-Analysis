@@ -1,0 +1,204 @@
+meta:
+  step: 5
+  purpose: Declared column times aggregation list that the SQL generator reads.
+  rationale: >-
+    The generator never loops over every column. An aggregation appears here
+    only when it carries information, because std over a binary flag does not.
+    Naming contract is PREFIX_COLUMN_AGG for whole-history features and
+    PREFIX_COLUMN_AGG_NM for windowed ones.
+
+windows_months: [3, 6, 12, 24]
+windows_rationale: >-
+  Repayment behaviour over the last three months carries more information than
+  behaviour four years ago, and a whole-history aggregate dilutes the two
+  signals into each other. This family holds the highest value and is the one
+  most often skipped.
+
+application_ratios:
+  prefix: APP
+  rationale: >-
+    Cheapest family to compute and consistently among the strongest. All six
+    are mandatory.
+  ratios:
+    CREDIT_INCOME_RATIO: AMT_CREDIT / AMT_INCOME_TOTAL
+    ANNUITY_INCOME_RATIO: AMT_ANNUITY / AMT_INCOME_TOTAL
+    CREDIT_GOODS_RATIO: AMT_CREDIT / AMT_GOODS_PRICE
+    CREDIT_ANNUITY_RATIO: AMT_CREDIT / AMT_ANNUITY
+    EMPLOYED_BIRTH_RATIO: DAYS_EMPLOYED / DAYS_BIRTH
+    INCOME_PER_FAMILY_MEMBER: AMT_INCOME_TOTAL / CNT_FAM_MEMBERS
+  zero_denominator: to_null
+  zero_denominator_note: >-
+    Division by zero yields null, never infinity, because the step 6 gate stops
+    the pipeline on any infinite value.
+
+sources:
+  bureau_balance:
+    prefix: BB
+    stage: 1
+    group_by: SK_ID_BUREAU
+    time_column: MONTHS_BALANCE
+    windowed: false
+    rows: 27299925
+    note: >-
+      Largest table in the dataset. DuckDB reads it column-wise and spills to
+      disk when needed, so memory does not bound this step.
+    derived:
+      STATUS_IS_DPD: STATUS IN ('1', '2', '3', '4', '5')
+      STATUS_IS_CLOSED: STATUS = 'C'
+    aggregations:
+      MONTHS_BALANCE: [count, min, max]
+      STATUS_IS_DPD: [sum, mean, max]
+      STATUS_IS_CLOSED: [sum, mean]
+    trends:
+      STATUS_IS_DPD: regr_slope
+
+  bureau:
+    prefix: BURO
+    stage: 2
+    group_by: SK_ID_CURR
+    join_from: bureau_balance
+    join_key: SK_ID_BUREAU
+    time_column: DAYS_CREDIT
+    windowed: true
+    derived:
+      CREDIT_ACTIVE_IS_ACTIVE: CREDIT_ACTIVE = 'Active'
+      DEBT_CREDIT_RATIO: AMT_CREDIT_SUM_DEBT / AMT_CREDIT_SUM
+    aggregations:
+      SK_ID_BUREAU: [count]
+      AMT_CREDIT_SUM: [sum, mean, max, min, std]
+      AMT_CREDIT_SUM_DEBT: [sum, mean, max]
+      AMT_CREDIT_SUM_OVERDUE: [sum, mean, max]
+      AMT_CREDIT_SUM_LIMIT: [sum, mean]
+      CREDIT_DAY_OVERDUE: [mean, max]
+      DAYS_CREDIT: [mean, min, max]
+      DAYS_CREDIT_ENDDATE: [mean, min, max]
+      CNT_CREDIT_PROLONG: [sum, max]
+      CREDIT_ACTIVE_IS_ACTIVE: [sum, mean]
+      DEBT_CREDIT_RATIO: [mean, max]
+      BB_STATUS_IS_DPD_MEAN: [mean, max]
+
+  previous_application:
+    prefix: PREV
+    stage: 2
+    group_by: SK_ID_CURR
+    time_column: DAYS_DECISION
+    windowed: true
+    derived:
+      STATUS_IS_REFUSED: NAME_CONTRACT_STATUS = 'Refused'
+      STATUS_IS_APPROVED: NAME_CONTRACT_STATUS = 'Approved'
+      APPLICATION_CREDIT_RATIO: AMT_APPLICATION / AMT_CREDIT
+    aggregations:
+      SK_ID_PREV: [count]
+      AMT_APPLICATION: [sum, mean, max, min]
+      AMT_CREDIT: [sum, mean, max, min]
+      AMT_ANNUITY: [mean, max]
+      AMT_DOWN_PAYMENT: [mean, max]
+      RATE_DOWN_PAYMENT: [mean]
+      DAYS_DECISION: [mean, min, max]
+      CNT_PAYMENT: [mean, sum]
+      STATUS_IS_REFUSED: [sum, mean]
+      STATUS_IS_APPROVED: [sum, mean]
+      APPLICATION_CREDIT_RATIO: [mean, max]
+
+  pos_cash_balance:
+    prefix: POS
+    stage: 1
+    group_by: SK_ID_PREV
+    roll_up_to: SK_ID_CURR
+    join_from: previous_application
+    time_column: MONTHS_BALANCE
+    windowed: true
+    derived:
+      IS_DPD: SK_DPD > 0
+    aggregations:
+      MONTHS_BALANCE: [count, min, max]
+      SK_DPD: [mean, max, sum]
+      SK_DPD_DEF: [mean, max, sum]
+      CNT_INSTALMENT: [mean, max]
+      CNT_INSTALMENT_FUTURE: [mean, min]
+      IS_DPD: [sum, mean]
+    trends:
+      CNT_INSTALMENT_FUTURE: regr_slope
+
+  installments_payments:
+    prefix: INST
+    stage: 1
+    group_by: SK_ID_PREV
+    roll_up_to: SK_ID_CURR
+    join_from: previous_application
+    time_column: DAYS_INSTALMENT
+    windowed: true
+    note: >-
+      An event table rather than a monthly one, which is what makes payment
+      delay measurable per transaction. PAYMENT_DELAY_DAYS and PAYMENT_RATIO are
+      the two features that measure repayment behaviour directly, with no
+      intermediate variable.
+    derived:
+      PAYMENT_DELAY_DAYS: DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT
+      IS_LATE: (DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT) > 0
+      PAYMENT_RATIO: AMT_PAYMENT / AMT_INSTALMENT
+      IS_UNDERPAID: AMT_PAYMENT < AMT_INSTALMENT
+    aggregations:
+      NUM_INSTALMENT_NUMBER: [count, max]
+      AMT_INSTALMENT: [sum, mean, max]
+      AMT_PAYMENT: [sum, mean, max]
+      PAYMENT_DELAY_DAYS: [mean, max, min, std]
+      IS_LATE: [sum, mean]
+      PAYMENT_RATIO: [mean, min, std]
+      IS_UNDERPAID: [sum, mean]
+    trends:
+      PAYMENT_DELAY_DAYS: regr_slope
+
+  credit_card_balance:
+    prefix: CC
+    stage: 1
+    group_by: SK_ID_PREV
+    roll_up_to: SK_ID_CURR
+    join_from: previous_application
+    time_column: MONTHS_BALANCE
+    windowed: true
+    derived:
+      UTILIZATION: AMT_BALANCE / AMT_CREDIT_LIMIT_ACTUAL
+      IS_DPD: SK_DPD > 0
+    aggregations:
+      MONTHS_BALANCE: [count, min, max]
+      AMT_BALANCE: [mean, max, min, std]
+      AMT_CREDIT_LIMIT_ACTUAL: [mean, max]
+      AMT_DRAWINGS_CURRENT: [sum, mean, max]
+      AMT_PAYMENT_CURRENT: [sum, mean]
+      CNT_DRAWINGS_CURRENT: [sum, mean, max]
+      SK_DPD: [mean, max]
+      SK_DPD_DEF: [mean, max]
+      UTILIZATION: [mean, max, std]
+      IS_DPD: [sum, mean]
+    trends:
+      AMT_BALANCE: regr_slope
+      UTILIZATION: regr_slope
+
+configurations:
+  rationale: >-
+    EXT_SOURCE_1 to 3 are third-party scores. They are legitimate because they
+    exist at application time, but they carry a very large share of the
+    predictive power. Only no_ext_source is usable for business analysis,
+    because only it shows which applicant attributes actually relate to risk.
+  full:
+    include_ext_source: true
+  no_ext_source:
+    include_ext_source: false
+    excluded_columns:
+      - EXT_SOURCE_1
+      - EXT_SOURCE_2
+      - EXT_SOURCE_3
+      - FLAG_MISSING_EXT_SOURCE_1
+      - FLAG_MISSING_EXT_SOURCE_2
+      - FLAG_MISSING_EXT_SOURCE_3
+
+selection:
+  rationale: >-
+    Fixed before looking at any result and never tuned against AUC. Adjusting a
+    selection criterion after seeing the score is how a filter becomes a
+    hyperparameter fitted to the evaluation set.
+  max_null_fraction: 0.95
+  drop_constant_columns: true
+  max_absolute_correlation: 0.98
+  correlation_sample_rows: 50000

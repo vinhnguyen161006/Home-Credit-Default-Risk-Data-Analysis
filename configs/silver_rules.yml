@@ -1,0 +1,118 @@
+meta:
+  step: 3
+  purpose: Normalization rules for values that cannot be used as they arrive.
+  rationale: >-
+    Missing data is never filled with zero. A customer whose aggregate is zero
+    borrowed zero; a customer whose aggregate is null never borrowed anywhere.
+    Filling zero erases the distinction between a thin file and a clean history,
+    which is the distinction this problem most needs to make.
+
+employment_sentinel:
+  column: DAYS_EMPLOYED
+  value: 365243
+  action: to_null
+  emit_flag: FLAG_NO_EMPLOYMENT
+  rationale: >-
+    A convention code for applicants who are not employed, about 18 percent of
+    rows. Left in place it injects a value equivalent to 1000 years into every
+    mean and corrupts all employment tenure statistics. Highest-risk trap in
+    this table.
+
+missing_value_codes:
+  codes: [XNA, XAP]
+  note: >-
+    In the history tables these two strings also act as missing values and are
+    handled the same way as a null.
+
+days_columns_sign:
+  policy: keep_negative
+  assert_non_positive: true
+  rationale: >-
+    Raw DAYS_* columns are negative day offsets from the application date, so
+    they already contain only past information. They stay negative and the step
+    3 gate asserts every value is at most zero. Sign flipping happens only in
+    the named derived columns below, so the gate has one unambiguous rule to
+    check.
+  columns:
+    - DAYS_BIRTH
+    - DAYS_EMPLOYED
+    - DAYS_REGISTRATION
+    - DAYS_ID_PUBLISH
+    - DAYS_LAST_PHONE_CHANGE
+    - DAYS_CREDIT
+    - DAYS_CREDIT_ENDDATE
+    - DAYS_ENDDATE_FACT
+    - DAYS_CREDIT_UPDATE
+    - DAYS_DECISION
+    - DAYS_FIRST_DRAWING
+    - DAYS_FIRST_DUE
+    - DAYS_LAST_DUE_1ST_VERSION
+    - DAYS_LAST_DUE
+    - DAYS_TERMINATION
+    - DAYS_INSTALMENT
+    - DAYS_ENTRY_PAYMENT
+
+derived_columns:
+  AGE_YEARS:
+    source: DAYS_BIRTH
+    expression: -DAYS_BIRTH / 365.25
+  EMPLOYMENT_YEARS:
+    source: DAYS_EMPLOYED
+    expression: -DAYS_EMPLOYED / 365.25
+    note: Null wherever the employment sentinel applied.
+
+categorical_to_null:
+  CODE_GENDER:
+    values: [XNA]
+    emit_flag: null
+    note: Four rows. No replacement value is assigned.
+
+categorical_keep_as_level:
+  ORGANIZATION_TYPE:
+    values: [XNA]
+    rationale: >-
+      About 18 percent, overlapping almost entirely with the retired population.
+      Not missing at random, so it stays a category of its own.
+
+winsorize:
+  AMT_INCOME_TOTAL:
+    upper_quantile: 0.999
+    drop_rows: false
+    note: Single extreme value at 117000000. Never drop the row.
+
+missingness_flags:
+  rationale: >-
+    Columns whose absence carries meaning get an explicit presence flag, so the
+    model can use absence as a feature rather than guessing at an imputed value.
+  EXT_SOURCE_1: FLAG_MISSING_EXT_SOURCE_1
+  EXT_SOURCE_2: FLAG_MISSING_EXT_SOURCE_2
+  EXT_SOURCE_3: FLAG_MISSING_EXT_SOURCE_3
+  OWN_CAR_AGE: FLAG_MISSING_OWN_CAR_AGE
+  OCCUPATION_TYPE: FLAG_MISSING_OCCUPATION
+
+keep_null_never_fill:
+  EXT_SOURCE_1:
+    missing_fraction: 0.56
+  OWN_CAR_AGE:
+    missing_fraction: 0.66
+    rationale: Missing because the applicant owns no car. Zero would mean a new car.
+
+history_presence_flags:
+  rationale: >-
+    After a LEFT JOIN a customer with no history has nulls across every column
+    of that source. The flag records why.
+  bureau: FLAG_NO_BUREAU_HISTORY
+  previous_application: FLAG_NO_PREVIOUS_APPLICATION
+  pos_cash_balance: FLAG_NO_POS_CASH_HISTORY
+  installments_payments: FLAG_NO_INSTALMENT_HISTORY
+  credit_card_balance: FLAG_NO_CREDIT_CARD_HISTORY
+
+building_block_columns:
+  variants: [_AVG, _MODE, _MEDI]
+  keep_variant: _AVG
+  emit_completeness_flag: FLAG_BUILDING_INFO_COMPLETE
+  rationale: >-
+    47 apartment description columns across three tightly correlated variants of
+    the same attribute, with very high missingness and the least predictive
+    power of any group. Reduced here, before aggregation, so the variants never
+    multiply through the feature families.

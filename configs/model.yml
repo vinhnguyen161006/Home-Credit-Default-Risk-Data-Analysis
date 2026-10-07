@@ -1,0 +1,131 @@
+meta:
+  step: 7
+  purpose: Split policy, baselines, hyperparameters, calibration and acceptance bounds.
+  rationale: >-
+    One seed governs every stochastic step, so a rerun reproduces the same
+    split, the same folds and the same model.
+
+random_seed: 42
+
+split:
+  holdout_fraction: 0.20
+  stratify_on: TARGET
+  expected_holdout_rows: 61502
+  expected_holdout_positives: 4964
+  target_rate_tolerance_pp: 0.1
+  rationale: >-
+    Hanley-McNeil at AUC 0.78 with 61502 applications and 4964 positives gives a
+    standard error of 0.0040 and a 95 percent interval about 0.016 wide. Wide
+    enough to separate two models 0.01 AUC apart on evidence rather than noise.
+    The holdout is read exactly once and informs no decision before that.
+
+cross_validation:
+  strategy: stratified_kfold
+  n_splits: 5
+  shuffle: true
+  time_based: false
+  time_based_rationale: >-
+    application_train has no date column, and SK_ID_CURR is not guaranteed to
+    increase with submission time. Using the id as a proxy for time is an
+    unverifiable assumption that would silently produce a distribution-shifted
+    validation set. The result document must state this reason.
+  fold_auc_spread_warning: 0.02
+
+class_imbalance:
+  method: scale_pos_weight
+  synthetic_oversampling: forbidden
+  rationale: >-
+    11.4 negatives per positive is within reach of class weights. Interpolating
+    new samples across many one-hot and many null columns produces invalid rows
+    and destroys probability calibration, which is the thing this system needs.
+
+baselines:
+  rationale: >-
+    Steps 0 and 1 are mandatory to run and to report. Without them the final
+    number has no frame of reference.
+  constant_rate:
+    expected_auc: 0.500
+  logistic_ext_source_only:
+    features: [EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3]
+    expected_auc: 0.70
+  logistic_application_and_ratios:
+    expected_auc: 0.74
+
+lightgbm:
+  rationale: >-
+    Chosen over logistic regression because missingness is itself a signal here
+    and a tree learns the missing branch direction, while logistic regression
+    must impute and loses it.
+  objective: binary
+  metric: auc
+  boosting_type: gbdt
+  learning_rate: 0.02
+  num_leaves: 34
+  max_depth: 8
+  min_child_samples: 70
+  min_child_weight: 40
+  subsample: 0.87
+  subsample_freq: 1
+  colsample_bytree: 0.60
+  reg_alpha: 0.04
+  reg_lambda: 0.07
+  n_estimators: 10000
+  early_stopping_rounds: 200
+  verbosity: -1
+  n_jobs: -1
+
+calibration:
+  method: isotonic
+  method_rationale: Suitable because the sample count is large.
+  on_dedicated_fold: true
+  verify_with: [brier_score, reliability_diagram]
+  reliability_bins: 20
+  note: >-
+    AUC does not change after calibration because ranking does not change.
+    Using AUC to check calibration is a mistake.
+
+scorecard:
+  anchor_score: 600
+  anchor_odds: 19.0
+  points_to_double_odds: 20
+  formula: Score = Offset - Factor * ln(p / (1 - p))
+  bands:
+    - {label: A, min_score: 660}
+    - {label: B, min_score: 620}
+    - {label: C, min_score: 580}
+    - {label: D, min_score: 540}
+    - {label: E, min_score: null}
+
+acceptance:
+  holdout_auc_min: 0.74
+  holdout_auc_max: 0.80
+  leakage_alarm_auc: 0.85
+  leakage_alarm_note: >-
+    Above 0.85 is a leakage warning to investigate and report, not a good
+    result. Stop and raise it before continuing.
+  univariate_auc_max: 0.95
+  univariate_auc_note: >-
+    All three EXT_SOURCE columns together reach only about 0.70, so a single
+    column above 0.95 is almost certainly leakage or a label copy.
+  ablation_top_features: 5
+
+mlflow:
+  experiment_name: home-credit-default-risk
+  log_artifacts: [reliability_diagram, decile_table, shap_summary, feature_manifest]
+
+fairness:
+  rationale: >-
+    Consumer lending is legally constrained on gender and age discrimination in
+    many markets. Scope stops at measuring and reporting; remediation is out of
+    scope, but results are published even when unfavourable.
+  attributes:
+    - CODE_GENDER
+    - AGE_BAND
+  measures:
+    - approval_rate_by_group
+    - auc_by_group
+    - calibration_by_group
+  most_important: calibration_by_group
+  most_important_note: >-
+    If the model overstates one group's risk, that group is systematically
+    priced against while carrying equivalent real risk.

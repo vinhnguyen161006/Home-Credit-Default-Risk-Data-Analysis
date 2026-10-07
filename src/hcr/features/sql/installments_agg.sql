@@ -1,0 +1,31 @@
+-- TODO Fold installments_payments to SK_ID_PREV, then to SK_ID_CURR through
+-- previous_application.
+--
+-- An event table, not a monthly one: each row is a payment actually made. That is
+-- what makes delay measurable per transaction, and it is the most direct
+-- behavioural signal in the dataset. 13.6 million rows, second largest table.
+--
+-- The table has no natural primary key, so no uniqueness assertion applies.
+--
+-- PAYMENT_DELAY_DAYS, IS_LATE, PAYMENT_RATIO and IS_UNDERPAID are defined in the
+-- silver layer. Do not recompute them here.
+--
+-- Required output columns, prefix INST, windows on DAYS_INSTALMENT:
+--   INST_NUM_INSTALMENT_NUMBER_COUNT / MAX
+--   INST_AMT_INSTALMENT_*                SUM MEAN MAX
+--   INST_AMT_PAYMENT_*                   SUM MEAN MAX
+--   INST_PAYMENT_DELAY_DAYS_*            MEAN MAX MIN STD
+--   INST_IS_LATE_SUM / MEAN              share of late payments
+--   INST_PAYMENT_RATIO_*                 MEAN MIN STD
+--   INST_IS_UNDERPAID_SUM / MEAN
+--   INST_PAYMENT_DELAY_DAYS_SLOPE        regr_slope, deteriorating or improving
+--
+-- The windowed delay columns are the highest-value features in the system.
+-- Repayment behaviour over the last three months carries more information than
+-- behaviour four years ago, and a whole-history mean dilutes the two into each
+-- other. This is the family most often skipped.
+--
+-- Keep the delay and the ratio as separate signals. One measures timing, the other
+-- measures amount, and a borrower can fail either independently of the other.
+--
+-- DAYS_INSTALMENT windows are in days: the last three months is >= -90.

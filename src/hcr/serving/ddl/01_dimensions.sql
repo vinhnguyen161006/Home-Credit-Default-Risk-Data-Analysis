@@ -1,0 +1,35 @@
+-- TODO Create the nine dimension tables.
+--
+-- Run before 02_fact.sql: the fact foreign keys reference these.
+--
+--   Dim_Occupation     OccupationKey    19 rows
+--   Dim_Organization   OrgKey           59 rows
+--   Dim_Education      EducationKey      6 rows   needs SortOrder
+--   Dim_ContractType   ContractKey       3 rows
+--   Dim_HousingType    HousingKey        7 rows
+--   Dim_FamilyStatus   FamilyKey         7 rows
+--   Dim_AgeBand        AgeBandKey        7 rows   needs SortOrder
+--   Dim_IncomeBand     IncomeBandKey     6 rows   needs SortOrder
+--   Dim_RiskBand       RiskBandKey       6 rows   needs SortOrder
+--
+-- Counts include the unknown member.
+--
+-- Three rules, each from a specific failure:
+--
+-- 1. Keys are generated integers. Never the business string: a long string indexes
+--    poorly and breaks on a whitespace or casing difference, and both occur here.
+--
+-- 2. Every dimension carries exactly one unknown member at key -1. That member is
+--    what keeps the fact table free of null foreign keys, and therefore the report
+--    free of blank rows.
+--
+-- 3. The four marked dimensions need a SortOrder column. Without it a chart orders
+--    alphabetically, so "Higher education" precedes "Secondary" and an income band
+--    axis reads as nonsense. The column is not optional for those four.
+--
+-- Declare NVARCHAR lengths from the observed values, not a blanket 4000. A column
+-- declared at 4000 exceeds the 1700 byte index key limit and cannot be indexed;
+-- NVARCHAR counts two bytes per character, so the practical ceiling is 850.
+--
+-- ORGANIZATION_TYPE holds the longest values of this group. OCCUPATION_TYPE is short.
+-- Declaring both the same defeats the purpose.

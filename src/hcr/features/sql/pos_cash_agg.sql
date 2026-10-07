@@ -1,0 +1,22 @@
+-- TODO Fold POS_CASH_balance to SK_ID_PREV, then to SK_ID_CURR through
+-- previous_application.
+--
+-- Input grain: one POS or cash contract times one month, 10 million rows.
+-- Stage 1 output grain: one contract.
+-- Stage 2 output grain: one customer.
+--
+-- Required output columns, prefix POS, windows on MONTHS_BALANCE:
+--   POS_MONTHS_BALANCE_COUNT / MIN / MAX
+--   POS_SK_DPD_*                         MEAN MAX SUM
+--   POS_SK_DPD_DEF_*                     MEAN MAX SUM
+--   POS_CNT_INSTALMENT_*                 MEAN MAX
+--   POS_CNT_INSTALMENT_FUTURE_*          MEAN MIN
+--   POS_IS_DPD_SUM / MEAN                share of delinquent months
+--   POS_CNT_INSTALMENT_FUTURE_SLOPE      regr_slope, repayment progress
+--
+-- Keep SK_DPD and SK_DPD_DEF separate. The tolerance-adjusted counter measures a
+-- different thing, and collapsing them loses the distinction between a borrower
+-- who pays a few days late and one who stops paying.
+--
+-- MONTHS_BALANCE windows are in months, so the last three months is >= -3.
+-- The second fold aggregates a per-contract aggregate, so name both levels.

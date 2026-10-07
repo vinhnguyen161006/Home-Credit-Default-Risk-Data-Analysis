@@ -1,0 +1,27 @@
+-- TODO Fold credit_card_balance to SK_ID_PREV, then to SK_ID_CURR through
+-- previous_application.
+--
+-- Input grain: one credit card times one month, 3.8 million rows.
+--
+-- UTILIZATION and IS_DPD come from the silver layer.
+--
+-- Required output columns, prefix CC, windows on MONTHS_BALANCE:
+--   CC_MONTHS_BALANCE_COUNT / MIN / MAX
+--   CC_AMT_BALANCE_*                     MEAN MAX MIN STD
+--   CC_AMT_CREDIT_LIMIT_ACTUAL_*         MEAN MAX
+--   CC_AMT_DRAWINGS_CURRENT_*            SUM MEAN MAX
+--   CC_AMT_PAYMENT_CURRENT_*             SUM MEAN
+--   CC_CNT_DRAWINGS_CURRENT_*            SUM MEAN MAX
+--   CC_SK_DPD_*                          MEAN MAX
+--   CC_SK_DPD_DEF_*                      MEAN MAX
+--   CC_UTILIZATION_*                     MEAN MAX STD
+--   CC_IS_DPD_SUM / MEAN
+--   CC_AMT_BALANCE_SLOPE                 regr_slope, balance trajectory
+--   CC_UTILIZATION_SLOPE                 regr_slope, utilisation trajectory
+--
+-- Do not clip utilisation at 1. Over-limit balances occur and the excess is
+-- precisely the risk signal.
+-- Utilisation is null where the limit is zero or null; leave the null rather than
+-- coalescing, because no limit is not the same as no usage.
+--
+-- MONTHS_BALANCE windows are in months: the last three months is >= -3.

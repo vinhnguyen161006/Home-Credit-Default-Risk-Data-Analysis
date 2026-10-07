@@ -1,0 +1,31 @@
+-- TODO Create the real primary and foreign keys, after the staging swap.
+--
+-- Run last, once the tables hold their final contents. Constraints at the database
+-- layer catch what an application-level check misses, and at this size they cost
+-- nothing to maintain.
+--
+-- Primary keys, created first because the foreign keys reference them:
+--   Fact_Application   SK_ID_CURR
+--   each Dim_*          its own surrogate key column
+--
+-- Foreign keys, nine from the fact table:
+--   OccupationKey   -> Dim_Occupation
+--   OrgKey          -> Dim_Organization
+--   EducationKey    -> Dim_Education
+--   ContractKey     -> Dim_ContractType
+--   HousingKey      -> Dim_HousingType
+--   FamilyKey       -> Dim_FamilyStatus
+--   AgeBandKey      -> Dim_AgeBand
+--   IncomeBandKey   -> Dim_IncomeBand
+--   RiskBandKey     -> Dim_RiskBand
+--
+-- Let a violation fail the load. That is the whole point of creating these: the
+-- database rejects what the build step let through, and a load that fails here is
+-- better than a report built on an orphan key.
+--
+-- Do not add ON DELETE CASCADE. Nothing in this pipeline deletes a dimension row, and
+-- a cascade would turn a mistaken delete into silent fact row loss.
+--
+-- Power BI does not read these constraints; its relationships are defined separately in
+-- the semantic model. They exist to catch a defective load before a human sees the
+-- numbers.

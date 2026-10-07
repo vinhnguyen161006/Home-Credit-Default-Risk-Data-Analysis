@@ -1,0 +1,20 @@
+-- TODO Stage 1: fold bureau_balance to SK_ID_BUREAU grain.
+-- Largest table in the dataset at 27.3 million rows, three columns. DuckDB reads
+-- it column-wise and spills when needed, so this does not depend on RAM.
+--
+-- Input grain: one external loan times one month.
+-- Output grain: one external loan.
+--
+-- STATUS_IS_DPD and STATUS_IS_CLOSED come from the silver layer, where the code
+-- list is defined once. Do not restate the status codes here: the same predicate
+-- held in two places is how two aggregations come to disagree.
+--
+-- Required output columns, prefix BB:
+--   BB_MONTHS_BALANCE_COUNT / MIN / MAX   history length and recency
+--   BB_STATUS_IS_DPD_SUM / MEAN / MAX     delinquency intensity
+--   BB_STATUS_IS_CLOSED_SUM / MEAN
+--   BB_STATUS_IS_DPD_SLOPE                regr_slope over MONTHS_BALANCE
+--
+-- The slope needs at least two non-null points; regr_slope returns null below
+-- that, which is correct and must not be coalesced to zero.
+-- No windowing at this stage: the window applies at customer grain in stage 2.

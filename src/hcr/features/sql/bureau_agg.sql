@@ -1,0 +1,37 @@
+-- TODO Stage 2: join stage 1 and fold bureau to SK_ID_CURR grain.
+--
+-- LEFT JOIN from bureau onto the stage 1 relation. The direction matters: only
+-- about 817395 of 1716428 bureau rows have monthly history, so an INNER JOIN
+-- would discard more than half the external loans.
+--
+-- Input grain: one loan at another credit institution.
+-- Output grain: one customer.
+--
+-- Required output columns, prefix BURO, whole history plus 3/6/12/24 month
+-- windows on DAYS_CREDIT:
+--   BURO_SK_ID_BUREAU_COUNT              number of external loans
+--   BURO_AMT_CREDIT_SUM_*                SUM MEAN MAX MIN STD
+--   BURO_AMT_CREDIT_SUM_DEBT_*           SUM MEAN MAX
+--   BURO_AMT_CREDIT_SUM_OVERDUE_*        SUM MEAN MAX
+--   BURO_AMT_CREDIT_SUM_LIMIT_*          SUM MEAN
+--   BURO_CREDIT_DAY_OVERDUE_*            MEAN MAX
+--   BURO_DAYS_CREDIT_*                   MEAN MIN MAX
+--   BURO_DAYS_CREDIT_ENDDATE_*           MEAN MIN MAX
+--   BURO_CNT_CREDIT_PROLONG_*            SUM MAX
+--   BURO_CREDIT_ACTIVE_IS_ACTIVE_*       SUM MEAN
+--   BURO_DEBT_CREDIT_RATIO_*             MEAN MAX
+--   BURO_BB_STATUS_IS_DPD_MEAN_*         MEAN MAX of the per-loan mean
+--
+-- The last group is a mean of a mean. Keep both levels visible in the name so the
+-- double fold is auditable from the column alone.
+--
+-- Window the DAYS_CREDIT filter in days, not months: the last three months is
+-- DAYS_CREDIT >= -90, not >= -3. Mixing the units silently widens the window
+-- thirtyfold and the resulting column still looks plausible.
+--
+-- Use COUNT(SK_ID_BUREAU) rather than COUNT(*) so a customer with no external
+-- loan yields zero rather than one.
+--
+-- Leave every aggregate null for a customer with no bureau row. The accompanying
+-- FLAG_NO_BUREAU_HISTORY records why, and a zero here would claim the customer
+-- borrowed nothing rather than never borrowed.

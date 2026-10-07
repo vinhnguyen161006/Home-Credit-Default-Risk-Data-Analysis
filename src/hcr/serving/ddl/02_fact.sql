@@ -1,0 +1,38 @@
+-- TODO Create Fact_Application: one row per loan application, 307511 rows.
+--
+-- Three column groups.
+--
+-- Foreign keys, nine columns, all NOT NULL:
+--   OccupationKey  OrgKey  EducationKey  ContractKey  HousingKey
+--   FamilyKey  AgeBandKey  IncomeBandKey  RiskBandKey
+--
+-- Measures, six columns:
+--   AMT_CREDIT  AMT_ANNUITY  AMT_INCOME_TOTAL  AMT_GOODS_PRICE
+--   CREDIT_INCOME_RATIO  ANNUITY_INCOME_RATIO
+--
+-- Model results, five columns:
+--   TARGET  PD_Predicted  CreditScore  Model_Version  IsHoldout
+--
+-- Primary key is SK_ID_CURR. Each id appears exactly once in application_train, so
+-- there is no slowly changing dimension problem and every attribute is as at
+-- application time.
+--
+-- TARGET and PD_Predicted sit in the same table deliberately. It lets the dashboard
+-- measure the model itself rather than only describe the portfolio. Splitting them
+-- would force a relationship traversal into the calibration gap measure for no gain.
+--
+-- IsHoldout separates the rows the model never trained on. The model quality page
+-- reads only IsHoldout = 1, so this column being correct is what makes that page
+-- honest.
+--
+-- Declare the nine key columns NOT NULL. Combined with the unknown member at -1 in
+-- every dimension, that makes a null foreign key impossible rather than merely
+-- unexpected.
+--
+-- PD_Predicted is a fraction between 0 and 1. Keep it so: do not store it as a
+-- percentage. The DAX threshold comparisons are written as fractions, and a column
+-- stored as 7 rather than 0.07 would make every one of them wrong by a hundredfold
+-- while still rendering plausibly.
+--
+-- Add a nonclustered index on PD_Predicted. The threshold page filters on it for every
+-- what-if value the reader drags.

@@ -1,0 +1,47 @@
+meta:
+  status: assumption
+  purpose: Cost structure behind the decision threshold.
+  rationale: >-
+    These numbers are not measured from the data and not supplied by Home
+    Credit. Every report that uses them must state that they are assumptions.
+    The published label threshold X and window Y are unknown, so the calibrated
+    probability is the probability of this dataset's event, not a Basel PD, and
+    it does not convert directly into realised loss.
+
+profit_margin: 0.15
+loss_given_default: 0.60
+
+false_positive:
+  description: Rejecting an applicant who would not have defaulted.
+  cost_expression: AMT_CREDIT * profit_margin
+  note: Lost revenue, and the applicant is pushed toward informal lending.
+
+false_negative:
+  description: Approving an applicant who defaults.
+  cost_expression: AMT_CREDIT * loss_given_default
+  note: Loss to the lender, and the applicant is pushed into bad debt.
+
+threshold_search:
+  min: 0.01
+  max: 0.50
+  step: 0.001
+  objective: minimise_total_expected_cost
+  rationale: >-
+    The default 0.5 is never used. The threshold is chosen on cross-validated
+    predictions and only then reported on the holdout, so the holdout informs no
+    decision.
+
+reporting:
+  portfolio_default_rate: 0.0807
+  decile_count: 10
+  require_monotonic_deciles: true
+  decile_rationale: >-
+    The most readable metric for a non-technical audience, because it answers
+    directly how much default is avoided by rejecting the riskiest ten percent.
+    Acceptance condition: the realised default rate falls monotonically from the
+    riskiest decile to the safest.
+  whatif_threshold_range: [0.02, 0.30]
+  required_metrics:
+    - approval_rate_at_threshold
+    - default_rate_among_approved
+    - decile_table

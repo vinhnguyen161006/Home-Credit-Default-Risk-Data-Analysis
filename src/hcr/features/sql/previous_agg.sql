@@ -1,0 +1,30 @@
+-- TODO Fold previous_application to SK_ID_CURR grain.
+--
+-- This table is also the join bridge for the three third-level tables, which
+-- carry SK_ID_PREV but no SK_ID_CURR. Their stage 2 folds join through here.
+--
+-- Input grain: one earlier application at Home Credit.
+-- Output grain: one customer.
+--
+-- Required output columns, prefix PREV, whole history plus windows on
+-- DAYS_DECISION:
+--   PREV_SK_ID_PREV_COUNT                number of earlier applications
+--   PREV_AMT_APPLICATION_*               SUM MEAN MAX MIN
+--   PREV_AMT_CREDIT_*                    SUM MEAN MAX MIN
+--   PREV_AMT_ANNUITY_*                   MEAN MAX
+--   PREV_AMT_DOWN_PAYMENT_*              MEAN MAX
+--   PREV_RATE_DOWN_PAYMENT_MEAN
+--   PREV_DAYS_DECISION_*                 MEAN MIN MAX
+--   PREV_CNT_PAYMENT_*                   MEAN SUM
+--   PREV_STATUS_IS_REFUSED_SUM / MEAN    prior refusal rate
+--   PREV_STATUS_IS_APPROVED_SUM / MEAN
+--   PREV_APPLICATION_CREDIT_RATIO_*      MEAN MAX, requested over granted
+--
+-- The refusal rate is a strong signal and a reminder of what it encodes: an
+-- earlier judgement by the lender, not an outcome by the borrower. It is
+-- legitimate because it predates this application, but SHAP commentary should say
+-- which of the two it is.
+--
+-- XNA and XAP in NAME_CONTRACT_STATUS are already null from the silver layer.
+--
+-- DAYS_DECISION windows are in days: the last three months is >= -90.
