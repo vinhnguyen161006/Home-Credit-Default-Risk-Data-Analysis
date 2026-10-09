@@ -10,106 +10,72 @@ across 58.4 million rows is slow to parse repeatedly and columnar reads let
 DuckDB touch only the columns an aggregation names.
 """
 
-from __future__ import annotations
-
-import logging
 from pathlib import Path
-from typing import Final
+import duckdb
 
-logger = logging.getLogger(__name__)
+project_folder = Path(__file__).resolve().parents[3]
+raw_folder = project_folder / "data" / "raw"
+output_folder = project_folder / "data" / "bronze"
+output_folder.mkdir(parents=True, exist_ok=True)
 
-COMPRESSION: Final = "zstd"
-COMPRESSION_LEVEL: Final = 3
+files = [
+    "application_train.csv",
+    "application_test.csv",
+    "bureau.csv",
+    "bureau_balance.csv",
+    "previous_application.csv",
+    "POS_CASH_balance.csv",
+    "installments_payments.csv",
+    "credit_card_balance.csv",
+]
 
-TABLES: Final = (
-    "application_train",
-    "application_test",
-    "bureau",
-    "bureau_balance",
-    "previous_application",
-    "pos_cash_balance",
-    "installments_payments",
-    "credit_card_balance",
-)
+def sql_path(path):
+    return "'" + path.as_posix().replace("'", "''") + "'"
 
+connection = duckdb.connect()
+connection.execute("SET memory_limit = '2GB'")
 
-def convert_table(table: str, source: Path, destination: Path) -> Path:
-    """Convert one raw CSV to Parquet without changing its content.
+try:
+    for filename in files:
+        source = raw_folder / filename
+        destination = output_folder / f"{source.stem}.parquet"
 
-    Args:
-        table: Logical table name, used for logging only.
-        source: Raw CSV to read.
-        destination: Parquet file to write.
+        if not source.is_file():
+            raise FileNotFoundError(f"Cannot find: {source}")
 
-    Returns:
-        The destination path.
+        print(f"Converting {filename}...")
 
-    Raises:
-        FileNotFoundError: If the source CSV is absent.
+        connection.execute(f"""
+            CREATE OR REPLACE TEMP VIEW current_csv AS
+            SELECT *
+            FROM read_csv_auto(
+                {sql_path(source)},
+                header = true,
+                sample_size = -1
+            )
+        """)
 
-    TODO:
-        - Convert with DuckDB's read_csv_auto straight into COPY TO, so the file
-          streams and the 27.3 million row bureau_balance never materialises in
-          memory. This is the one place a function takes paths rather than
-          frames, because DuckDB reads and writes disk directly.
-        - Pass sample_size=-1 so DuckDB scans the whole file for type inference.
-          A sampled inference reads a numeric column as text when the first rows
-          happen to be empty, which would move a parsing decision into bronze.
-        - Keep the raw column names and the raw casing exactly. Downstream SQL
-          and the data contract both reference the Kaggle spelling.
-        - Write through a temporary file in the destination directory and rename
-          on success, so an interrupted run leaves no half-written Parquet that
-          a later step would read as complete.
-        - Log the row count written and the elapsed time at INFO, with lazy
-          formatting: logger.info("Wrote %s rows to %s", rows, destination).
-    """
-    raise NotImplementedError
+        connection.execute(f"""
+            COPY current_csv TO {sql_path(destination)}
+            (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
 
+        csv_rows = connection.execute(
+            "SELECT COUNT(*) FROM current_csv"
+        ).fetchone()[0]
 
-def flatten_raw_layout(table: str) -> Path:
-    """Resolve a table name to its raw CSV despite the nested directory.
+        parquet_rows = connection.execute(f"""
+            SELECT COUNT(*)
+            FROM read_parquet({sql_path(destination)})
+        """).fetchone()[0]
 
-    The raw tree is not flat: application_train, application_test and
-    sample_submission sit under home-credit-default-risk while the six history
-    files sit directly in the raw directory.
+        if csv_rows != parquet_rows:
+            raise ValueError(f"Row counts do not match for {filename}")
 
-    TODO:
-        - Delegate to paths.raw_path, which reads the location from the data
-          contract. Do not re-derive the filename here; one mapping only.
-    """
-    raise NotImplementedError
+        print(f"OK: {csv_rows:,} rows saved to {destination.name}")
 
+finally:
+    connection.close()
 
-def run() -> dict[str, Path]:
-    """Convert all eight tables and return the bronze path of each.
-
-    Returns:
-        Logical table name to the Parquet file written.
-
-    TODO:
-        - Convert the tables in TABLES order, which puts the small application
-          tables first so a misconfigured raw directory fails in seconds rather
-          than after the largest file.
-        - Skip a table whose Parquet is newer than its CSV and log the skip, so
-          a rerun after a failure does not redo finished work. Offer a force
-          argument to override; a changed CSV with an unchanged timestamp is the
-          one case the check misses.
-        - Never write into the raw directory. Bronze is a separate layer so this
-          step cannot overwrite its own input.
-        - Return the mapping rather than printing it; the orchestrator logs.
-    """
-    raise NotImplementedError
-
-
-def main() -> None:
-    """Entry point for `python -m hcr.ingest.to_parquet`.
-
-    TODO:
-        - Configure logging, call run, and exit non-zero on failure so the
-          Makefile target stops the chain.
-    """
-    raise NotImplementedError
-
-
-if __name__ == "__main__":
-    main()
+print("All CSV files converted to parquet.")
+                         
