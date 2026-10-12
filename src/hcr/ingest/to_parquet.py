@@ -29,8 +29,10 @@ files = [
     "credit_card_balance.csv",
 ]
 
+
 def sql_path(path):
     return "'" + path.as_posix().replace("'", "''") + "'"
+
 
 connection = duckdb.connect()
 connection.execute("SET memory_limit = '2GB'")
@@ -60,9 +62,7 @@ try:
             (FORMAT PARQUET, COMPRESSION ZSTD)
         """)
 
-        csv_rows = connection.execute(
-            "SELECT COUNT(*) FROM current_csv"
-        ).fetchone()[0]
+        csv_rows = connection.execute("SELECT COUNT(*) FROM current_csv").fetchone()[0]
 
         parquet_rows = connection.execute(f"""
             SELECT COUNT(*)
@@ -78,4 +78,3 @@ finally:
     connection.close()
 
 print("All CSV files converted to parquet.")
-                         
