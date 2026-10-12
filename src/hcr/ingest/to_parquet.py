@@ -1,80 +1,116 @@
-"""Step 1: convert the eight raw CSV files to compressed Parquet.
+"""Convert raw CSV files to compressed Parquet without cleaning values."""
 
-Content is never altered here. Sentinel handling, sign conventions and type
-repair belong to the silver layer, so bronze stays a faithful and cheap-to-read
-copy of the source. That separation is what lets step 2 assert the contract
-against something equivalent to the original file.
-
-Conversion is the reason the rest of the pipeline is affordable: 2.5 GB of CSV
-across 58.4 million rows is slow to parse repeatedly and columnar reads let
-DuckDB touch only the columns an aggregation names.
-"""
-
+import logging
 from pathlib import Path
+
 import duckdb
 
-project_folder = Path(__file__).resolve().parents[3]
-raw_folder = project_folder / "data" / "raw"
-output_folder = project_folder / "data" / "bronze"
-output_folder.mkdir(parents=True, exist_ok=True)
-
-files = [
-    "application_train.csv",
-    "application_test.csv",
-    "bureau.csv",
-    "bureau_balance.csv",
-    "previous_application.csv",
-    "POS_CASH_balance.csv",
-    "installments_payments.csv",
-    "credit_card_balance.csv",
-]
+logger = logging.getLogger(__name__)
 
 
-def sql_path(path):
+def sql_path(path: Path) -> str:
+    """Return a safely quoted SQL string for a filesystem path.
+
+    Args:
+        path: File path to quote.
+
+    Returns:
+        Quoted SQL string with embedded apostrophes escaped.
+    """
     return "'" + path.as_posix().replace("'", "''") + "'"
 
 
-connection = duckdb.connect()
-connection.execute("SET memory_limit = '2GB'")
+def convert_table(source: Path, destination: Path) -> None:
+    """Convert one CSV, validate row counts, and publish after closing DuckDB.
 
-try:
+    Args:
+        source: Original CSV file.
+        destination: Output Parquet file.
+    """
+    temporary = destination.with_suffix(".parquet.tmp")
+    temporary.unlink(missing_ok=True)
+
+    logger.info("Converting %s...", source.name)
+
+    try:
+        with duckdb.connect() as connection:
+            connection.execute("SET memory_limit = '2GB'")
+
+            connection.execute(f"""
+                CREATE TEMP VIEW current_csv AS
+                SELECT *
+                FROM read_csv_auto(
+                    {sql_path(source)},
+                    header = true,
+                    sample_size = -1
+                )
+            """)
+
+            connection.execute(f"""
+                COPY current_csv TO {sql_path(temporary)}
+                (FORMAT PARQUET, COMPRESSION ZSTD)
+            """)
+
+            csv_result = connection.execute("SELECT COUNT(*) FROM current_csv").fetchone()
+
+            parquet_result = connection.execute(f"""
+                SELECT COUNT(*)
+                FROM read_parquet({sql_path(temporary)})
+            """).fetchone()
+
+            if csv_result is None or parquet_result is None:
+                raise RuntimeError(f"Could not read row counts for {source.name}")
+
+            csv_rows = csv_result[0]
+            parquet_rows = parquet_result[0]
+
+            if csv_rows != parquet_rows:
+                raise ValueError(f"Row counts do not match for {source.name}")
+
+        temporary.replace(destination)
+
+        logger.info(
+            "OK: %s rows saved to %s",
+            f"{csv_rows:,}",
+            destination.name,
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def main() -> None:
+    """Convert all CSV files into validated Parquet files."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    project_folder = Path(__file__).resolve().parents[3]
+    raw_folder = project_folder / "data" / "raw"
+    output_folder = project_folder / "data" / "bronze"
+
+    files = (
+        "application_train.csv",
+        "application_test.csv",
+        "bureau.csv",
+        "bureau_balance.csv",
+        "previous_application.csv",
+        "POS_CASH_balance.csv",
+        "installments_payments.csv",
+        "credit_card_balance.csv",
+    )
+
     for filename in files:
         source = raw_folder / filename
-        destination = output_folder / f"{source.stem}.parquet"
-
         if not source.is_file():
             raise FileNotFoundError(f"Cannot find: {source}")
 
-        print(f"Converting {filename}...")
+    output_folder.mkdir(parents=True, exist_ok=True)
 
-        connection.execute(f"""
-            CREATE OR REPLACE TEMP VIEW current_csv AS
-            SELECT *
-            FROM read_csv_auto(
-                {sql_path(source)},
-                header = true,
-                sample_size = -1
-            )
-        """)
+    for filename in files:
+        source = raw_folder / filename
+        destination = output_folder / f"{source.stem}.parquet"
+        convert_table(source, destination)
 
-        connection.execute(f"""
-            COPY current_csv TO {sql_path(destination)}
-            (FORMAT PARQUET, COMPRESSION ZSTD)
-        """)
+    logger.info("All CSV files converted to Parquet.")
 
-        csv_rows = connection.execute("SELECT COUNT(*) FROM current_csv").fetchone()[0]
 
-        parquet_rows = connection.execute(f"""
-            SELECT COUNT(*)
-            FROM read_parquet({sql_path(destination)})
-        """).fetchone()[0]
-
-        if csv_rows != parquet_rows:
-            raise ValueError(f"Row counts do not match for {filename}")
-
-        print(f"OK: {csv_rows:,} rows saved to {destination.name}")
-
-finally:
-    connection.close()
-
-print("All CSV files converted to parquet.")
+if __name__ == "__main__":
+    main()
