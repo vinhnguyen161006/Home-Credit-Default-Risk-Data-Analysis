@@ -23,7 +23,7 @@ help:
 	@echo "mssql-up   start SQL Server on the port from .env"
 
 install:
-	uv sync --extra dev
+	uv sync --locked
 
 all:
 	$(PY) -m hcr.pipeline.run_all
@@ -72,6 +72,7 @@ test:
 	$(PY) -m pytest
 
 lint:
+	$(PY) ruff format --check .
 	$(PY) ruff check .
 
 format:

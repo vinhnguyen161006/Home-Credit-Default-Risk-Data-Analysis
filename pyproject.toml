@@ -23,7 +23,7 @@ dependencies = [
     "typer==0.15.1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest==8.3.4",
     "pytest-cov==6.0.0",
