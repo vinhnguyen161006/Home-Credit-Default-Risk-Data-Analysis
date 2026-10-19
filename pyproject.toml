@@ -14,7 +14,7 @@ dependencies = [
     "lightgbm==4.5.0",
     "shap==0.46.0",
     "mlflow==2.19.0",
-    "pandera==0.21.1",
+    "pandera==0.22.1",
     "pyyaml==6.0.2",
     "python-dotenv==1.0.1",
     "pyodbc==5.2.0",
@@ -99,7 +99,16 @@ warn_unreachable = true
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = ["duckdb.*", "lightgbm.*", "shap.*", "mlflow.*", "pandera.*", "pyodbc.*", "sklearn.*"]
+module = [
+    "duckdb.*",
+    "lightgbm.*",
+    "shap.*",
+    "mlflow.*",
+    "pandera.*",
+    "pyarrow.*",
+    "pyodbc.*",
+    "sklearn.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

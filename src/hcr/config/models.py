@@ -23,7 +23,9 @@ class TableContract:
         required_columns: Columns whose absence stops the pipeline.
         forbidden_columns: Columns whose presence stops the pipeline, used to
             assert application_test carries no TARGET.
-        dtypes: Expected dtype per column, checked where declared.
+        dtypes: Expected dtype of every column in the file. Together with
+            required_columns it names every column the step 2 gate demands,
+            so a renamed column cannot hide behind an unchanged column count.
     """
 
     file: str
@@ -42,7 +44,9 @@ class DataContract:
     Attributes:
         tables: Contract per logical table name.
         expected_coverage: Known coverage gaps, reported as warnings rather than
-            stops because they describe the data and are not defects.
+            stops because they describe the data and are not defects. Keys are
+            bureau_rows_total, bureau_rows_with_balance, train_customers_total
+            and train_customers_with_bureau_history.
         target_positive_rate: Published positive rate, 0.0807.
     """
 
