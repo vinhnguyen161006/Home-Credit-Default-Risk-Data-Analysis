@@ -1,11 +1,22 @@
-"""Convert raw CSV files to compressed Parquet without cleaning values."""
+"""Convert raw CSV files to compressed Parquet without cleaning values.
+
+Type inference is limited to integers, doubles and text. Left to its defaults, DuckDB
+reads the Yes and No text of EMERGENCYSTATE_MODE as a boolean, which changes the content
+bronze must preserve and fails the step 2 contract.
+"""
 
 import logging
 from pathlib import Path
+from typing import Final
 
 import duckdb
 
+from hcr.config import load_data_contract
+from hcr.paths import bronze_path, ensure_parent, raw_path
+
 logger = logging.getLogger(__name__)
+
+TYPE_CANDIDATES: Final = "['BIGINT', 'DOUBLE', 'VARCHAR']"
 
 
 def sql_path(path: Path) -> str:
@@ -42,7 +53,8 @@ def convert_table(source: Path, destination: Path) -> None:
                 FROM read_csv_auto(
                     {sql_path(source)},
                     header = true,
-                    sample_size = -1
+                    sample_size = -1,
+                    auto_type_candidates = {TYPE_CANDIDATES}
                 )
             """)
 
@@ -82,32 +94,15 @@ def main() -> None:
     """Convert all CSV files into validated Parquet files."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    project_folder = Path(__file__).resolve().parents[3]
-    raw_folder = project_folder / "data" / "raw"
-    output_folder = project_folder / "data" / "bronze"
+    contract = load_data_contract()
+    sources = {table: raw_path(table, contract) for table in contract.tables}
 
-    files = (
-        "application_train.csv",
-        "application_test.csv",
-        "bureau.csv",
-        "bureau_balance.csv",
-        "previous_application.csv",
-        "POS_CASH_balance.csv",
-        "installments_payments.csv",
-        "credit_card_balance.csv",
-    )
-
-    for filename in files:
-        source = raw_folder / filename
+    for source in sources.values():
         if not source.is_file():
             raise FileNotFoundError(f"Cannot find: {source}")
 
-    output_folder.mkdir(parents=True, exist_ok=True)
-
-    for filename in files:
-        source = raw_folder / filename
-        destination = output_folder / f"{source.stem}.parquet"
-        convert_table(source, destination)
+    for table, source in sources.items():
+        convert_table(source, ensure_parent(bronze_path(table)))
 
     logger.info("All CSV files converted to Parquet.")
 
