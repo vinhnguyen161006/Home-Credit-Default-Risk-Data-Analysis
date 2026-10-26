@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help install all ingest contracts silver split features gates train evaluate serve \
-        readme test lint format typecheck check clean mssql-up mssql-down
+        readme test lint format typecheck check clean mssql-up mssql-down baselines
 
 PY := uv run
 SRC := src/hcr
@@ -14,7 +14,8 @@ help:
 	@echo "split      step 4  stratified holdout split, writes holdout_ids.parquet"
 	@echo "features   step 5  DuckDB two-stage aggregation to customer grain"
 	@echo "gates      step 6  feature quality and leakage gates"
-	@echo "train      step 7  baselines, LightGBM CV, calibration, threshold"
+	@echo "baselines  step 7  mandatory baselines 0-2 on the training split, logged to MLflow"
+	@echo "train      step 7  LightGBM CV, calibration, threshold"
 	@echo "evaluate   open the holdout exactly once and write the final report"
 	@echo "serve      step 8  build star schema and load SQL Server"
 	@echo "readme     fill README metrics from MLflow"
@@ -49,8 +50,10 @@ gates:
 	$(PY) -m hcr.quality.feature_gates
 	$(PY) -m hcr.quality.leakage_checks
 
-train:
+baselines:
 	$(PY) -m hcr.modeling.baselines
+
+train: baselines
 	$(PY) -m hcr.modeling.train
 	$(PY) -m hcr.modeling.calibrate
 	$(PY) -m hcr.modeling.threshold

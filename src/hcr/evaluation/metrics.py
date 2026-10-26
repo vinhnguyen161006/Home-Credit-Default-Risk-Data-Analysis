@@ -13,15 +13,16 @@ constant baseline computes it once, to demonstrate exactly that.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+
+from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
+
+from hcr.evaluation.confidence import auc_interval
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
-
-logger = logging.getLogger(__name__)
 
 ACCURACY_OF_ALL_ZEROS: Final = 0.9193
 
@@ -56,26 +57,39 @@ def compute_metrics(
 ) -> MetricSet:
     """Compute every reported metric for one set of predictions.
 
+    The interval is attached here, not left to the caller, so the bare AUC is never
+    the only figure a caller receives. Accuracy is deliberately absent: a caller that
+    needs it must compute it in its own module and justify the need there.
+
     Args:
-        probabilities: Calibrated default probabilities.
+        probabilities: Default probabilities, calibrated or not.
         labels: Realised TARGET.
 
     Returns:
         The metric set, with the AUC confidence interval attached.
 
     Raises:
-        ValueError: If labels hold a single class, which makes AUC undefined.
-
-    TODO:
-        - Attach the confidence interval here rather than leaving it to the caller.
-          Every AUC figure in the result document must carry one, and the way to
-          guarantee that is to make the bare number unavailable.
-        - Raise on a single-class input rather than returning 0.5. A silent 0.5 from
-          a degenerate slice would read as a real measurement in a fairness table.
-        - Do not compute accuracy. A caller that needs it can justify the need in
-          its own docstring; this function does not offer it.
+        ValueError: If labels hold a single class. A degenerate slice must fail loudly
+            rather than return 0.5, which would read as a real measurement in a fairness
+            table.
     """
-    raise NotImplementedError
+    positives = int(labels.sum())
+    negatives = int(labels.size) - positives
+    if positives == 0 or negatives == 0:
+        raise ValueError(
+            f"Labels must hold both classes, got {positives} positives of {labels.size} rows"
+        )
+    interval = auc_interval(float(roc_auc_score(labels, probabilities)), positives, negatives)
+    return MetricSet(
+        auc=interval.auc,
+        auc_ci_lower=interval.lower,
+        auc_ci_upper=interval.upper,
+        pr_auc=float(average_precision_score(labels, probabilities)),
+        brier=float(brier_score_loss(labels, probabilities)),
+        log_loss=float(log_loss(labels, probabilities)),
+        rows=int(labels.size),
+        positives=positives,
+    )
 
 
 def decile_lift(

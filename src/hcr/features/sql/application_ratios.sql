@@ -1,18 +1,9 @@
--- TODO Compute the six mandatory ratios at application grain.
--- Cheapest feature family and consistently among the strongest.
--- Every denominator needs a zero guard: a division by zero yields infinity and
--- the step 6 gate stops the pipeline on any infinite value.
---
--- Required output columns, one row per SK_ID_CURR:
---   APP_CREDIT_INCOME_RATIO       AMT_CREDIT / AMT_INCOME_TOTAL
---   APP_ANNUITY_INCOME_RATIO      AMT_ANNUITY / AMT_INCOME_TOTAL
---   APP_CREDIT_GOODS_RATIO        AMT_CREDIT / AMT_GOODS_PRICE
---   APP_CREDIT_ANNUITY_RATIO      AMT_CREDIT / AMT_ANNUITY
---   APP_EMPLOYED_BIRTH_RATIO      DAYS_EMPLOYED / DAYS_BIRTH
---   APP_INCOME_PER_FAMILY_MEMBER  AMT_INCOME_TOTAL / CNT_FAM_MEMBERS
---
--- Read from the silver application table, never bronze: DAYS_EMPLOYED must
--- already be null where the 365243 sentinel applied, or the employment ratio
--- becomes nonsense for 18 percent of rows.
--- The ratio over two DAYS_ columns stays positive because both operands are
--- negative.
+SELECT
+    SK_ID_CURR,
+    AMT_CREDIT / NULLIF(AMT_INCOME_TOTAL, 0) AS APP_CREDIT_INCOME_RATIO,
+    AMT_ANNUITY / NULLIF(AMT_INCOME_TOTAL, 0) AS APP_ANNUITY_INCOME_RATIO,
+    AMT_CREDIT / NULLIF(AMT_GOODS_PRICE, 0) AS APP_CREDIT_GOODS_RATIO,
+    AMT_CREDIT / NULLIF(AMT_ANNUITY, 0) AS APP_CREDIT_ANNUITY_RATIO,
+    DAYS_EMPLOYED / NULLIF(DAYS_BIRTH, 0) AS APP_EMPLOYED_BIRTH_RATIO,
+    AMT_INCOME_TOTAL / NULLIF(CNT_FAM_MEMBERS, 0) AS APP_INCOME_PER_FAMILY_MEMBER
+FROM read_parquet(?)

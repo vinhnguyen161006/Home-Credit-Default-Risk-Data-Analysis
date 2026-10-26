@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
-from hcr.config.models import TableContract
+from hcr.config.models import BaselineConfig, TableContract
 from hcr.config.values import (
     ConfigError,
     parse_string_mapping,
@@ -19,6 +19,7 @@ from hcr.config.values import (
     require_keys,
     require_mapping,
     require_number,
+    require_section,
     require_string,
     require_string_tuple,
     strip_annotations,
@@ -35,6 +36,43 @@ ACCEPTANCE_KEYS: Final = (
     "leakage_alarm_auc",
     "univariate_auc_max",
 )
+BASELINE_NAMES: Final = (
+    "constant_rate",
+    "logistic_ext_source_only",
+    "logistic_application_and_ratios",
+)
+EXT_SOURCE_BASELINE: Final = "logistic_ext_source_only"
+BASELINE_TOLERANCE_KEY: Final = "expected_auc_tolerance"
+
+
+def parse_baselines(value: Any, source: Path) -> BaselineConfig:
+    """Return the baseline reference values after checking every baseline is declared.
+
+    Each of the three sequence steps must carry an expected AUC, otherwise a result could
+    be reported with no frame of reference.
+    """
+    section = require_mapping(value, "baselines", source)
+    require_keys(section, (*BASELINE_NAMES, BASELINE_TOLERANCE_KEY), source)
+    expected_auc = {
+        name: require_number(
+            require_section(section, name, ("expected_auc",), source)["expected_auc"],
+            f"baselines.{name}.expected_auc",
+            source,
+        )
+        for name in BASELINE_NAMES
+    }
+    ext_source = require_section(section, EXT_SOURCE_BASELINE, ("features",), source)
+    return BaselineConfig(
+        expected_auc=expected_auc,
+        ext_source_features=require_string_tuple(
+            ext_source["features"], f"baselines.{EXT_SOURCE_BASELINE}.features", source
+        ),
+        auc_tolerance=require_number(
+            section[BASELINE_TOLERANCE_KEY],
+            f"baselines.{BASELINE_TOLERANCE_KEY}",
+            source,
+        ),
+    )
 
 
 def parse_table_contract(name: str, entry: Any, source: Path) -> TableContract:

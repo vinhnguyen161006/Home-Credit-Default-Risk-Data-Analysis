@@ -29,6 +29,7 @@ from hcr.config.loaders import (
     random_seed,
 )
 from hcr.config.models import (
+    BaselineConfig,
     CostConfig,
     DataContract,
     FeatureSpec,
@@ -48,6 +49,7 @@ __all__ = [
     "ENV_MSSQL_PORT",
     "EXPECTED_TABLES",
     "RANDOM_SEED_KEY",
+    "BaselineConfig",
     "ConfigError",
     "CostConfig",
     "DataContract",

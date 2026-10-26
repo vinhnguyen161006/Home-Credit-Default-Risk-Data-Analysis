@@ -69,6 +69,24 @@ def test_config_loader_missing_key_names_file_and_key(
     assert filename in str(raised.value)
 
 
+def test_model_config_without_baselines_section_is_rejected(tmp_path: Path) -> None:
+    modified = _write_modified_config(tmp_path, "model.yml", lambda data: data.pop("baselines"))
+
+    with pytest.raises(config.ConfigError, match="baselines"):
+        config.load_model_config(modified)
+
+
+def test_model_config_exposes_the_three_baseline_references() -> None:
+    baselines = config.load_model_config().baselines
+
+    assert set(baselines.expected_auc) == {
+        "constant_rate",
+        "logistic_ext_source_only",
+        "logistic_application_and_ratios",
+    }
+    assert baselines.ext_source_features == ("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3")
+
+
 def test_require_keys_lists_every_missing_key() -> None:
     with pytest.raises(config.ConfigError, match="alpha, gamma"):
         config.require_keys({"beta": 1}, ("alpha", "beta", "gamma"), Path("example.yml"))

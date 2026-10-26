@@ -95,6 +95,24 @@ class FeatureSpec:
 
 
 @dataclass(frozen=True)
+class BaselineConfig:
+    """Parsed baselines section of configs/model.yml.
+
+    Attributes:
+        expected_auc: Reference AUC per baseline name, used to flag a sequence step
+            that lands far from what the literature and the data predict.
+        ext_source_features: The third-party score columns the EXT_SOURCE-only
+            baseline uses.
+        auc_tolerance: Allowed gap between a baseline and its expected AUC before a
+            warning is logged.
+    """
+
+    expected_auc: dict[str, float]
+    ext_source_features: tuple[str, ...]
+    auc_tolerance: float
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     """Parsed configs/model.yml.
 
@@ -109,6 +127,7 @@ class ModelConfig:
         acceptance: The AUC bounds, including the 0.85 leakage alarm and the
             0.95 univariate ceiling.
         fairness_attributes: CODE_GENDER and AGE_BAND.
+        baselines: Expected AUCs and feature list of the mandatory baselines.
         mlflow_experiment_name: Experiment every run is logged under.
     """
 
@@ -120,6 +139,7 @@ class ModelConfig:
     calibration_method: str
     acceptance: dict[str, float]
     fairness_attributes: tuple[str, ...]
+    baselines: BaselineConfig
     mlflow_experiment_name: str
 
 

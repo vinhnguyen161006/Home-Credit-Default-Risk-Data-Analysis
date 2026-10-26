@@ -16,6 +16,7 @@ from typing import Final
 from hcr.config.models import CostConfig, DataContract, FeatureSpec, ModelConfig, SilverRules
 from hcr.config.rules import (
     parse_acceptance,
+    parse_baselines,
     parse_employment_sentinel,
     parse_table_contract,
     validate_cost_fractions,
@@ -92,6 +93,7 @@ MODEL_CONFIG_KEYS: Final = (
     "split",
     "cross_validation",
     "class_imbalance",
+    "baselines",
     "lightgbm",
     "calibration",
     "acceptance",
@@ -267,6 +269,7 @@ def load_model_config(path: Path | None = None) -> ModelConfig:
             "fairness.attributes",
             source,
         ),
+        baselines=parse_baselines(data["baselines"], source),
         mlflow_experiment_name=require_string(
             require_section(data, "mlflow", ("experiment_name",), source)["experiment_name"],
             "mlflow.experiment_name",

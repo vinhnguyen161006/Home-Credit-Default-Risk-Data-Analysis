@@ -22,19 +22,45 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from hcr.paths import sql_dir
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     import duckdb
+    import polars as pl
 
 
 logger = logging.getLogger(__name__)
 
 EXPECTED_CUSTOMER_ROWS: Final = 307511
 FEATURE_VERSION: Final = "v1"
+APPLICATION_RATIOS_FILENAME: Final = "application_ratios.sql"
 
 AGGREGATION_FUNCTIONS: Final = ("count", "sum", "mean", "max", "min", "std")
 TREND_FUNCTION: Final = "regr_slope"
+
+
+def compute_application_ratios(
+    connection: duckdb.DuckDBPyConnection,
+    silver_application: Path,
+) -> pl.DataFrame:
+    """Compute the six mandatory application ratios, one row per SK_ID_CURR.
+
+    Takes the Parquet path rather than a frame, so DuckDB reads the file where it sits,
+    as the other aggregation steps do. Denominators go through NULLIF, so a zero yields
+    null and never infinity, which the step 6 gate would reject.
+
+    Args:
+        connection: DuckDB connection; the caller owns its lifetime.
+        silver_application: Silver application Parquet, with DAYS_EMPLOYED already null
+            where the sentinel applied.
+
+    Returns:
+        The SK_ID_CURR column and the six APP_ ratio columns.
+    """
+    query = (sql_dir() / APPLICATION_RATIOS_FILENAME).read_text(encoding="utf-8")
+    return connection.execute(query, [str(silver_application)]).pl()
 
 
 class AggregationError(Exception):

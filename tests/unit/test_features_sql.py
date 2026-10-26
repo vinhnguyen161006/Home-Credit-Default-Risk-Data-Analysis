@@ -11,6 +11,14 @@ Tests run against the small fixtures through an in-memory DuckDB connection, so 
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import duckdb
+import polars as pl
+import pytest
+
+from hcr.features.build import compute_application_ratios
+
 
 def test_aggregation_yields_one_row_per_customer() -> None:
     """TODO The assembled matrix has exactly one row per application id.
@@ -94,13 +102,70 @@ def test_window_filter_uses_months_for_months_balance() -> None:
     raise NotImplementedError
 
 
-def test_ratio_guards_against_zero_denominator() -> None:
-    """TODO Every application ratio yields null, not infinity, on a zero denominator.
+APPLICATION_RATIO_COLUMNS = (
+    "APP_CREDIT_INCOME_RATIO",
+    "APP_ANNUITY_INCOME_RATIO",
+    "APP_CREDIT_GOODS_RATIO",
+    "APP_CREDIT_ANNUITY_RATIO",
+    "APP_EMPLOYED_BIRTH_RATIO",
+    "APP_INCOME_PER_FAMILY_MEMBER",
+)
 
-    Assert for each of the six ratios. The step 6 gate stops on infinity, so a missing guard
-    here fails the pipeline later and further from its cause.
-    """
-    raise NotImplementedError
+
+def _write_silver_application(tmp_path: Path, frame: pl.DataFrame) -> Path:
+    path = tmp_path / "application_train.parquet"
+    frame.write_parquet(path)
+    return path
+
+
+def test_ratio_guards_against_zero_denominator(
+    duckdb_connection: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    silver = _write_silver_application(
+        tmp_path,
+        pl.DataFrame(
+            {
+                "SK_ID_CURR": [1],
+                "AMT_CREDIT": [100.0],
+                "AMT_ANNUITY": [0.0],
+                "AMT_INCOME_TOTAL": [0.0],
+                "AMT_GOODS_PRICE": [0.0],
+                "DAYS_EMPLOYED": [-100.0],
+                "DAYS_BIRTH": [0.0],
+                "CNT_FAM_MEMBERS": [0.0],
+            }
+        ),
+    )
+
+    row = compute_application_ratios(duckdb_connection, silver).row(0, named=True)
+
+    assert all(row[column] is None for column in APPLICATION_RATIO_COLUMNS)
+
+
+def test_employed_birth_ratio_stays_null_for_sentinel_customer(
+    duckdb_connection: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    silver = _write_silver_application(
+        tmp_path,
+        pl.DataFrame(
+            {
+                "SK_ID_CURR": [2],
+                "AMT_CREDIT": [100.0],
+                "AMT_ANNUITY": [10.0],
+                "AMT_INCOME_TOTAL": [50.0],
+                "AMT_GOODS_PRICE": [100.0],
+                "DAYS_EMPLOYED": [None],
+                "DAYS_BIRTH": [-1000.0],
+                "CNT_FAM_MEMBERS": [2.0],
+            },
+            schema_overrides={"DAYS_EMPLOYED": pl.Float64},
+        ),
+    )
+
+    row = compute_application_ratios(duckdb_connection, silver).row(0, named=True)
+
+    assert row["APP_EMPLOYED_BIRTH_RATIO"] is None
+    assert row["APP_CREDIT_INCOME_RATIO"] == pytest.approx(2.0)
 
 
 def test_column_names_follow_the_naming_contract() -> None:

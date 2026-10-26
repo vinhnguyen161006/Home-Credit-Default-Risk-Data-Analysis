@@ -43,6 +43,7 @@ baselines:
   rationale: >-
     Steps 0 and 1 are mandatory to run and to report. Without them the final
     number has no frame of reference.
+  expected_auc_tolerance: 0.03
   constant_rate:
     expected_auc: 0.500
   logistic_ext_source_only:
