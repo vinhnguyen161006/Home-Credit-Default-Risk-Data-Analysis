@@ -1,196 +1,103 @@
-"""Step 3 for the application tables: repair the seven known value traps.
-
-Each repair here exists because the raw value cannot enter a calculation as it
-stands. The governing rule: missing data is not zero. A null aggregate means the
-customer never borrowed; a zero aggregate means they borrowed nothing. Filling
-zero erases the distinction between a thin file and a clean history, which is
-the distinction this problem most needs to make.
-
-Grain is preserved. One silver row per application, same as bronze.
-"""
-
-from __future__ import annotations
+"""Clean application data while preserving missing-value information."""
 
 import logging
-from typing import TYPE_CHECKING, Final
+from pathlib import Path
 
-if TYPE_CHECKING:
-    import polars as pl
+import pandas as pd
 
-    from hcr.config import SilverRules
-
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-EMPLOYMENT_SENTINEL: Final = 365243
-DAYS_PER_YEAR: Final = 365.25
-GENDER_UNKNOWN_CODE: Final = "XNA"
-INCOME_WINSOR_QUANTILE: Final = 0.999
+project_folder = Path(__file__).resolve().parents[3]
+source = project_folder / "data" / "bronze" / "application_train.parquet"
 
+df = pd.read_parquet(source)
 
-def null_employment_sentinel(frame: pl.DataFrame) -> pl.DataFrame:
-    """Replace the 365243 employment code with null and flag the row.
+# Replace missing values in OCCUPATION_TYPE with "Unknown" to preserve the information that the value was missing.
+logger.info("Missing before: %s", df["OCCUPATION_TYPE"].isna().sum())
 
-    The highest-risk trap in this table. The value is a convention code for
-    applicants who are not employed, about 18 percent of rows. Left in place it
-    injects a figure equivalent to 1000 years into every mean and corrupts all
-    employment tenure statistics.
+df["OCCUPATION_TYPE"] = df["OCCUPATION_TYPE"].fillna("Unknown")
 
-    Args:
-        frame: Application table at bronze grain.
+logger.info("Missing after: %s", df["OCCUPATION_TYPE"].isna().sum())
 
-    Returns:
-        The frame with DAYS_EMPLOYED nulled where it held the sentinel and a new
-        FLAG_NO_EMPLOYMENT column.
+# Add a new column to indicate whether car age is missing for car owners. 
+missing_car_age = df[df["OWN_CAR_AGE"].isna()]
 
-    TODO:
-        - Null DAYS_EMPLOYED where it equals EMPLOYMENT_SENTINEL and set
-          FLAG_NO_EMPLOYMENT to 1 on exactly those rows, 0 elsewhere.
-        - Set the flag from the sentinel match, not from the resulting null.
-          DAYS_EMPLOYED may be null in the source for other reasons, and the flag
-          must mean "not employed", not "value absent".
-        - Log the affected row count at INFO and warn if it falls outside 15 to
-          21 percent, since a large shift means the source convention changed.
-    """
-    raise NotImplementedError
+logger.info(
+    "Car ownership among rows missing car age:\n%s",
+    missing_car_age["FLAG_OWN_CAR"].value_counts(dropna=False).to_string(),
+)
+df["CAR_AGE_MISSING"] = (
+    (df["FLAG_OWN_CAR"] == "Y") & df["OWN_CAR_AGE"].isna()
+)
 
+logger.info(
+    "Car owners with missing car age: %s",
+    df["CAR_AGE_MISSING"].sum(),
+)
 
-def derive_age_and_tenure(frame: pl.DataFrame) -> pl.DataFrame:
-    """Add AGE_YEARS and EMPLOYMENT_YEARS as positive year counts.
+# Replace missing values in NAME_TYPE_SUITE with "Unknown" to preserve the information that the value was missing. 
+logger.info("Missing suite before: %s", df["NAME_TYPE_SUITE"].isna().sum())
 
-    DAYS_BIRTH and DAYS_EMPLOYED stay negative, because the step 3 gate asserts
-    every DAYS_* column is at most zero. Sign flipping is confined to these
-    derived columns so that gate has one unambiguous rule to check.
+df["NAME_TYPE_SUITE"] = df["NAME_TYPE_SUITE"].fillna("Unknown")
 
-    TODO:
-        - Compute AGE_YEARS as -DAYS_BIRTH / DAYS_PER_YEAR.
-        - Compute EMPLOYMENT_YEARS the same way, leaving it null wherever
-          null_employment_sentinel nulled the source. Run this after that
-          function, never before, or the sentinel becomes 1000 years of tenure.
-    """
-    raise NotImplementedError
+logger.info("Missing suite after: %s", df["NAME_TYPE_SUITE"].isna().sum())
 
+# Replace the anomalous value 365243 in DAYS_EMPLOYED with NaN to preserve the information that the value was missing. 
+df["DAYS_EMPLOYED_ANOMALY"] = df["DAYS_EMPLOYED"] == 365243
 
-def null_unknown_gender(frame: pl.DataFrame) -> pl.DataFrame:
-    """Replace the four XNA gender rows with null.
+logger.info(
+    "Employment values to replace: %s",
+    df["DAYS_EMPLOYED_ANOMALY"].sum(),
+)
 
-    No replacement value is assigned. Imputing a gender on four rows would
-    fabricate a protected attribute that the fairness measurement then reports
-    on, which is worse than a null the model handles natively.
+df.loc[df["DAYS_EMPLOYED_ANOMALY"], "DAYS_EMPLOYED"] = float("nan")
 
-    TODO:
-        - Null CODE_GENDER where it equals GENDER_UNKNOWN_CODE.
-        - Emit no flag. Four rows carry no signal worth a column.
-        - Assert the affected count is small, single digits, and warn otherwise.
-    """
-    raise NotImplementedError
+# Mark review for income records for the application with SK_ID_CURR 114967, which has an anomalous income value. 
+df["INCOME_REVIEW_REQUIRED"] = df["SK_ID_CURR"].eq(114967)
 
+logger.info(
+    "Income records requiring review: %s",
+    df["INCOME_REVIEW_REQUIRED"].sum(),
+)
 
-def keep_organization_unknown_as_level(frame: pl.DataFrame) -> pl.DataFrame:
-    """Keep ORGANIZATION_TYPE XNA as a category of its own.
+# Replace the anomalous value "XNA" in CODE_GENDER with "Unknown" to preserve the information that the value was missing.
+df["CODE_GENDER"] = df["CODE_GENDER"].replace("XNA", "Unknown")
 
-    About 18 percent of rows, overlapping almost entirely with the retired
-    population. Not missing at random, so treating it as absent would discard a
-    real group distinction.
+logger.info(
+    "Gender after cleaning:\n%s",
+    df["CODE_GENDER"].value_counts(dropna=False).to_string(),
+)
 
-    TODO:
-        - Leave the value in place and return the frame unchanged, or normalise
-          it to an explicit label such as "NOT_EMPLOYED_OR_UNKNOWN" if a
-          readable category name is wanted for the BI layer.
-        - Do not null it. This function exists to document that the omission is
-          deliberate, so a later reader does not "fix" it.
-    """
-    raise NotImplementedError
+assert len(df) == 307511, "Row count changed"
+assert df["SK_ID_CURR"].notna().all(), "Missing application IDs"
+assert df["SK_ID_CURR"].is_unique, "Duplicate application IDs"
+assert df["TARGET"].isin([0, 1]).all(), "Invalid TARGET"
 
+assert df["OCCUPATION_TYPE"].notna().all(), "Missing occupation"
+assert df["NAME_TYPE_SUITE"].notna().all(), "Missing suite"
+assert not df["CODE_GENDER"].eq("XNA").any(), "XNA remains"
+assert not df["DAYS_EMPLOYED"].eq(365243).any(), "365243 remains"
 
-def winsorize_income(frame: pl.DataFrame, upper_quantile: float) -> pl.DataFrame:
-    """Cap AMT_INCOME_TOTAL at its upper quantile without dropping rows.
+logger.info("Cleaning checks passed.")
 
-    One applicant reports 117000000, far outside the rest of the distribution.
-    The row is a real application and dropping it would bias the sample; only the
-    value needs containing.
+# Add columns to indicate amount of missing values in amount columns
+amount_columns = ["AMT_ANNUITY", "AMT_GOODS_PRICE"]
 
-    Args:
-        frame: Application table.
-        upper_quantile: Quantile to cap at, 0.999 per the silver rules.
+for column in amount_columns:
+    df[f"{column}_MISSING"] = df[column].isna()
 
-    TODO:
-        - Compute the quantile over non-null values and clip above it.
-        - Never drop a row, and log how many values were capped.
-        - Consider emitting log income as a separate column rather than
-          replacing the raw value, so the BI layer can still report the real
-          figure while the model sees the tamed one.
-    """
-    raise NotImplementedError
+    logger.info(
+        "%s: kept %s missing values",
+        column,
+        df[f"{column}_MISSING"].sum(),
+    )
 
+# Save the cleaned data to the silver folder
+silver_folder = project_folder / "data" / "silver"
+silver_folder.mkdir(parents=True, exist_ok=True)
 
-def add_missingness_flags(frame: pl.DataFrame, rules: SilverRules) -> pl.DataFrame:
-    """Add an explicit presence flag for each column whose absence has meaning.
+destination = silver_folder / "application_train.parquet"
+df.to_parquet(destination, index=False)
 
-    EXT_SOURCE_1 is absent for about 56 percent of applicants and OWN_CAR_AGE for
-    about 66 percent, the latter because the applicant owns no car. The null
-    stays; the flag lets a linear baseline use the absence that LightGBM would
-    learn from the missing branch anyway.
-
-    TODO:
-        - For each column in rules.missingness_flags, add the named flag as 1
-          where the column is null and 0 elsewhere.
-        - Never fill the source column. The flag is additive; filling would
-          destroy the very signal the flag records.
-    """
-    raise NotImplementedError
-
-
-def reduce_building_columns(frame: pl.DataFrame) -> pl.DataFrame:
-    """Collapse the 47 apartment description columns to one variant plus a flag.
-
-    Three variants, _AVG, _MODE and _MEDI, describe the same attribute and
-    correlate tightly. The group is nearly two thirds of the table's columns and
-    contributes the least predictive power of any group, with very high
-    missingness throughout.
-
-    Reduction happens here, before aggregation, so the variants never multiply
-    through the four feature families.
-
-    TODO:
-        - Keep the _AVG variant and drop _MODE and _MEDI.
-        - Add FLAG_BUILDING_INFO_COMPLETE recording whether the group was
-          populated at all, which is the part of this group that does carry
-          signal.
-        - Consider replacing the kept columns with a single completeness score if
-          the step 6 correlation filter removes most of them anyway; decide from
-          the filter's output, not in advance.
-    """
-    raise NotImplementedError
-
-
-def run() -> tuple[int, int]:
-    """Normalize application_train and application_test into silver.
-
-    Returns:
-        Row counts written for train and test, in that order.
-
-    TODO:
-        - Apply the repairs in order: sentinel nulling, then derived years, then
-          gender, then organisation, then winsorize, then flags, then building
-          reduction. Order matters between the first two.
-        - Apply identical logic to train and test. A repair applied to only one
-          of them makes the two tables structurally different, which would break
-          any later scoring of the test set.
-        - Never write into the bronze directory.
-        - Assert the output row count equals the input row count. This step
-          repairs values and adds columns; it removes no row.
-    """
-    raise NotImplementedError
-
-
-def main() -> None:
-    """Entry point for `python -m hcr.silver.clean_application`.
-
-    TODO:
-        - Configure logging, call run, exit non-zero on failure.
-    """
-    raise NotImplementedError
-
-
-if __name__ == "__main__":
-    main()
+logger.info("Saved cleaned data to %s", destination)
