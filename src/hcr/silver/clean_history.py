@@ -12,6 +12,9 @@ to customer grain is step 5.
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
@@ -184,12 +187,30 @@ def run() -> dict[str, int]:
 
 
 def main() -> None:
-    """Entry point for `python -m hcr.silver.clean_history`.
+    """Run standalone history cleaners in dependency order."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    TODO:
-        - Configure logging, call run, exit non-zero on failure.
-    """
-    raise NotImplementedError
+    silver_directory = Path(__file__).resolve().parent
+
+    scripts = (
+        "clean_bureau.py",
+        "clean_previous_application.py",
+        "clean_bureau_balance.py",
+        "clean_pos_cash_balance.py",
+        "clean_instalments_payments.py",
+        "clean_credit_card_balance.py",
+    )
+
+    for filename in scripts:
+        script = silver_directory / filename
+
+        if not script.is_file():
+            raise FileNotFoundError(script)
+
+        logger.info("Running %s", filename)
+        subprocess.run([sys.executable, str(script)], check=True)
+
+    logger.info("All history cleaners completed.")
 
 
 if __name__ == "__main__":

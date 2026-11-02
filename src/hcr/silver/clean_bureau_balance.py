@@ -17,9 +17,7 @@ df = pd.read_parquet(source)
 logger.info("Total rows: %s", len(df))
 logger.info("Missing values:\n%s", df.isna().sum().to_string())
 
-duplicate_months = df.duplicated(
-    subset=["SK_ID_BUREAU", "MONTHS_BALANCE"]
-).sum()
+duplicate_months = df.duplicated(subset=["SK_ID_BUREAU", "MONTHS_BALANCE"]).sum()
 
 logger.info("Duplicate credit-month pairs: %s", duplicate_months)
 

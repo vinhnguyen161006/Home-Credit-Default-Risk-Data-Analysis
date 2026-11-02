@@ -16,9 +16,7 @@ df = pd.read_parquet(source)
 logger.info("Total rows: %s", len(df))
 logger.info("Missing values:\n%s", df.isna().sum().to_string())
 
-duplicate_months = df.duplicated(
-    subset=["SK_ID_PREV", "MONTHS_BALANCE"]
-).sum()
+duplicate_months = df.duplicated(subset=["SK_ID_PREV", "MONTHS_BALANCE"]).sum()
 
 logger.info("Duplicate credit-month pairs: %s", duplicate_months)
 
@@ -53,11 +51,7 @@ logger.info(
 
 df["DRAWING_CHANNELS_MISSING"] = missing_channels
 
-numeric_columns = [
-    column
-    for column in df.columns
-    if column.startswith(("AMT_", "CNT_"))
-]
+numeric_columns = [column for column in df.columns if column.startswith(("AMT_", "CNT_"))]
 
 for column in numeric_columns:
     logger.info(
@@ -70,10 +64,7 @@ for column in numeric_columns:
     )
 
 # Check for negative values in the drawing channels, which is an anomaly.
-negative_drawings = (
-    (df["AMT_DRAWINGS_ATM_CURRENT"] < 0)
-    | (df["AMT_DRAWINGS_CURRENT"] < 0)
-)
+negative_drawings = (df["AMT_DRAWINGS_ATM_CURRENT"] < 0) | (df["AMT_DRAWINGS_CURRENT"] < 0)
 
 review_columns = [
     "SK_ID_PREV",

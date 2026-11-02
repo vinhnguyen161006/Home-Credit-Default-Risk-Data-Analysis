@@ -16,9 +16,7 @@ df = pd.read_parquet(source)
 logger.info("Total rows: %s", len(df))
 logger.info("Missing values:\n%s", df.isna().sum().to_string())
 
-duplicate_months = df.duplicated(
-    subset=["SK_ID_PREV", "MONTHS_BALANCE"]
-).sum()
+duplicate_months = df.duplicated(subset=["SK_ID_PREV", "MONTHS_BALANCE"]).sum()
 
 logger.info("Duplicate loan-month pairs: %s", duplicate_months)
 
@@ -31,9 +29,7 @@ for column in instalment_columns:
     logger.info(
         "\nMissing %s by contract status:\n%s",
         column,
-        missing_rows["NAME_CONTRACT_STATUS"]
-        .value_counts(dropna=False)
-        .to_string(),
+        missing_rows["NAME_CONTRACT_STATUS"].value_counts(dropna=False).to_string(),
     )
 
 df["CNT_INSTALMENT_FUTURE_MISSING"] = df["CNT_INSTALMENT_FUTURE"].isna()
@@ -84,10 +80,7 @@ logger.info(
     review_rows["SK_ID_PREV"].nunique(),
 )
 
-difference = (
-    review_rows["CNT_INSTALMENT_FUTURE"]
-    - review_rows["CNT_INSTALMENT"]
-)
+difference = review_rows["CNT_INSTALMENT_FUTURE"] - review_rows["CNT_INSTALMENT"]
 
 logger.info(
     "Instalment difference counts:\n%s",

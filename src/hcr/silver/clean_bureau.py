@@ -14,12 +14,9 @@ source = project_folder / "data" / "bronze" / "bureau.parquet"
 df = pd.read_parquet(source)
 
 # Check for credit that is closed but has a missing end date, which is an anomaly.
-enddate_summary = (
-    df.groupby("CREDIT_ACTIVE")["DAYS_ENDDATE_FACT"]
-    .agg(
-        total_rows="size",
-        known_enddate="count",
-    )
+enddate_summary = df.groupby("CREDIT_ACTIVE")["DAYS_ENDDATE_FACT"].agg(
+    total_rows="size",
+    known_enddate="count",
 )
 
 enddate_summary["missing_enddate"] = (
@@ -31,17 +28,14 @@ logger.info(
     enddate_summary.to_string(),
 )
 
-df["CLOSED_ENDDATE_MISSING"] = (
-    (df["CREDIT_ACTIVE"] == "Closed")
-    & df["DAYS_ENDDATE_FACT"].isna()
-)
+df["CLOSED_ENDDATE_MISSING"] = (df["CREDIT_ACTIVE"] == "Closed") & df["DAYS_ENDDATE_FACT"].isna()
 
 logger.info(
     "Closed credits missing actual end date: %s",
     df["CLOSED_ENDDATE_MISSING"].sum(),
 )
 
-# Count the number of records with missing values in the amount columns, as well as the number of negative and zero values. 
+# Count the number of records with missing values in the amount columns, as well as the number of negative and zero values.
 amount_columns = [
     "AMT_CREDIT_SUM",
     "AMT_CREDIT_SUM_DEBT",
@@ -74,9 +68,7 @@ review_columns = [
 
 logger.info(
     "Negative debt examples:\n%s",
-    negative_debt.nsmallest(10, "AMT_CREDIT_SUM_DEBT")[
-        review_columns
-    ].to_string(index=False),
+    negative_debt.nsmallest(10, "AMT_CREDIT_SUM_DEBT")[review_columns].to_string(index=False),
 )
 
 df["DEBT_NEGATIVE"] = df["AMT_CREDIT_SUM_DEBT"] < 0
@@ -103,14 +95,12 @@ logger.info(
     df[date_columns].agg(["min", "max"]).to_string(),
 )
 
-df["ACTUAL_END_BEFORE_CREDIT"] = (
-    df["DAYS_ENDDATE_FACT"].notna()
-    & (df["DAYS_ENDDATE_FACT"] < df["DAYS_CREDIT"])
+df["ACTUAL_END_BEFORE_CREDIT"] = df["DAYS_ENDDATE_FACT"].notna() & (
+    df["DAYS_ENDDATE_FACT"] < df["DAYS_CREDIT"]
 )
 
-df["PLANNED_END_BEFORE_CREDIT"] = (
-    df["DAYS_CREDIT_ENDDATE"].notna()
-    & (df["DAYS_CREDIT_ENDDATE"] < df["DAYS_CREDIT"])
+df["PLANNED_END_BEFORE_CREDIT"] = df["DAYS_CREDIT_ENDDATE"].notna() & (
+    df["DAYS_CREDIT_ENDDATE"] < df["DAYS_CREDIT"]
 )
 
 logger.info(
