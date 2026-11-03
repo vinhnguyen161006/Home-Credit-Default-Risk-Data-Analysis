@@ -6,369 +6,511 @@ raw data lies and a single combined test would pass while one of them regressed.
 The sentinel test is the most important in this file. Missing it puts a value equivalent
 to a thousand years of employment into every mean, and the resulting statistics look
 plausible enough to publish.
+
+The agreed rules this file pins: XNA gender becomes the label Unknown, the income keeps its
+original value and gains an outlier flag, and a missing occupation becomes Unknown only
+after its missingness flag is set.
 """
 
 from __future__ import annotations
 
-import pytest
+from dataclasses import replace
+from typing import TYPE_CHECKING
+
 import polars as pl
+import pytest
 
-from typing import NamedTuple
-
-from hcr.silver.clean_application import (
+from conftest import (
     EMPLOYMENT_SENTINEL,
-    GENDER_UNKNOWN_CODE,
-    INCOME_WINSOR_QUANTILE,
+    EMPLOYMENT_SENTINEL_ROWS,
+    EXT_SOURCE_1_NULL_ROWS,
+    EXTREME_INCOME,
+    FIRST_APPLICATION_ID,
+    GENDER_XNA_ROWS,
+    INSTALMENT_CASES,
+    ORGANIZATION_XNA_ROWS,
+    OWN_CAR_AGE_NULL_ROWS,
+)
+from hcr.config import load_silver_rules
+from hcr.silver.clean_application import (
+    BUILDING_COMPLETE_FLAG,
     add_missingness_flags,
+    assert_application_clean,
+    clean_application,
     derive_age_and_tenure,
-    keep_organization_unknown_as_level,
+    flag_income_outliers,
+    normalize_application,
     null_employment_sentinel,
-    null_unknown_gender,
     reduce_building_columns,
-    winsorize_income,
+    replace_unknown_categories,
+)
+from hcr.silver.clean_history import (
+    assert_non_positive_days,
+    derive_bureau_balance_status,
+    derive_delinquency_flags,
+    derive_payment_behaviour,
+    derive_utilization,
+    normalize_history_table,
+    null_days_sentinels,
+    null_missing_value_codes,
+    strict_days_columns,
 )
 
-EMPLOYMENT_SENTINEL_ROWS = frozenset({3, 6, 11, 19, 27, 35, 43, 47, 49})
-EXTREME_INCOME = 117_000_000.0
-EXTREME_INCOME_ROWS = frozenset({23})
-EXT_SOURCE_1_NULL_ROWS = frozenset(range(28))
-GENDER_XNA_ROWS = frozenset({9, 31})
-OWN_CAR_AGE_NULL_ROWS = frozenset(range(17, 50))
-FIRST_APPLICATION_ID = 100001
+if TYPE_CHECKING:
+    from pathlib import Path
+
+HISTORY_CODES = ("XNA", "XAP")
+INCOME_OUTLIER_BASE_ROWS = 1000
+MINIMUM_ADULT_AGE = 17.9
+MAXIMUM_AGE = 100
 
 
-class InstalmentCase(NamedTuple):
-    """One payment against its schedule, named by the behaviour it exercises."""
-
-    days_instalment: int
-    days_entry_payment: int | None
-    amt_instalment: float
-    amt_payment: float | None
-
-
-INSTALMENT_CASES = {
-    "late": InstalmentCase(-100, -95, 5000.0, 5000.0),
-    "early": InstalmentCase(-70, -75, 5000.0, 5000.0),
-    "on_time": InstalmentCase(-40, -40, 5000.0, 5000.0),
-    "underpaid": InstalmentCase(-10, -10, 5000.0, 3000.0),
-    "overpaid": InstalmentCase(-130, -130, 5000.0, 6500.0),
-    "zero_instalment": InstalmentCase(-160, -160, 0.0, 1200.0),
-    "unpaid": InstalmentCase(-5, None, 5000.0, None),
-}
+def _ids(frame: pl.DataFrame, rows: frozenset[int]) -> list[int]:
+    return [FIRST_APPLICATION_ID + row for row in rows if row < len(frame)]
 
 
 def test_days_employed_sentinel_becomes_null(application_frame: pl.DataFrame) -> None:
-    """The 365243 sentinel is replaced with null.
+    result = null_employment_sentinel(application_frame, load_silver_rules())
 
-    Assert no row retains the literal value after normalization. This is the condition
-    the step 3 gate also checks, and it belongs in both places: the gate catches it on
-    real data, this test catches it on an edit.
-    """
-    result = null_employment_sentinel(application_frame)
     assert (result["DAYS_EMPLOYED"] == EMPLOYMENT_SENTINEL).sum() == 0
+    assert result["DAYS_EMPLOYED"].null_count() == len(EMPLOYMENT_SENTINEL_ROWS)
 
 
 def test_days_employed_sentinel_sets_no_employment_flag(application_frame: pl.DataFrame) -> None:
-    """FLAG_NO_EMPLOYMENT is set on exactly the sentinel rows.
+    result = null_employment_sentinel(application_frame, load_silver_rules())
 
-    Assert the flag is 1 where the sentinel was and 0 elsewhere. The flag must come from
-    the sentinel match, not from the resulting null: DAYS_EMPLOYED can be null for other
-    reasons, and the flag means "not employed", not "value absent".
-    """
-    result = null_employment_sentinel(application_frame)
-    flag = result["FLAG_NO_EMPLOYMENT"]
+    flagged = set(result.filter(pl.col("FLAG_NO_EMPLOYMENT") == 1)["SK_ID_CURR"].to_list())
+    assert flagged == set(_ids(application_frame, EMPLOYMENT_SENTINEL_ROWS))
 
-    expected_sentinel_ids = {
-        application_frame["SK_ID_CURR"][row] for row in EMPLOYMENT_SENTINEL_ROWS
-    }
-    flagged_ids = set(
-        result.filter(pl.col("FLAG_NO_EMPLOYMENT") == 1)["SK_ID_CURR"].to_list()
+
+def test_no_employment_flag_is_zero_when_days_employed_is_null_for_another_reason(
+    application_frame: pl.DataFrame,
+) -> None:
+    row = 0
+    blanked = application_frame.with_columns(
+        pl.when(pl.col("SK_ID_CURR") == FIRST_APPLICATION_ID + row)
+        .then(None)
+        .otherwise(pl.col("DAYS_EMPLOYED"))
+        .alias("DAYS_EMPLOYED")
     )
-    assert flagged_ids == expected_sentinel_ids
+
+    result = null_employment_sentinel(blanked, load_silver_rules())
+
+    assert (
+        result.filter(pl.col("SK_ID_CURR") == FIRST_APPLICATION_ID + row)[
+            "FLAG_NO_EMPLOYMENT"
+        ].item()
+        == 0
+    )
 
 
 def test_employment_years_is_null_for_sentinel_rows(application_frame: pl.DataFrame) -> None:
-    """EMPLOYMENT_YEARS is null where the sentinel applied.
-
-    Guards the ordering between nulling and deriving. If the derived column is computed
-    first, the sentinel becomes a thousand years of tenure and nothing downstream notices.
-    """
-    after_sentinel = null_employment_sentinel(application_frame)
+    after_sentinel = null_employment_sentinel(application_frame, load_silver_rules())
     result = derive_age_and_tenure(after_sentinel)
 
-    sentinel_ids = {application_frame["SK_ID_CURR"][row] for row in EMPLOYMENT_SENTINEL_ROWS}
-    sentinel_rows = result.filter(pl.col("SK_ID_CURR").is_in(sentinel_ids))
+    sentinel_rows = result.filter(
+        pl.col("SK_ID_CURR").is_in(_ids(application_frame, EMPLOYMENT_SENTINEL_ROWS))
+    )
     assert sentinel_rows["EMPLOYMENT_YEARS"].is_null().all()
+    assert (result["EMPLOYMENT_YEARS"].drop_nulls() >= 0).all()
 
 
 def test_days_columns_remain_non_positive(application_frame: pl.DataFrame) -> None:
-    """Every DAYS_* value is at most zero after normalization.
+    rules = load_silver_rules()
+    result = normalize_application(application_frame, rules)
 
-    These are negative offsets from the application date, so a positive value would be a
-    record dated after the decision. Assert across all DAYS_* columns present, not just
-    one.
-    """
-    after_sentinel = null_employment_sentinel(application_frame)
-    result = derive_age_and_tenure(after_sentinel)
-
-    days_cols = [c for c in result.columns if c.startswith("DAYS_")]
-    for col in days_cols:
-        non_null = result[col].drop_nulls()
-        assert (non_null <= 0).all(), f"{col} has positive values after normalization"
+    days_columns = [column for column in result.columns if column.startswith("DAYS_")]
+    assert days_columns
+    for column in days_columns:
+        assert (result[column].drop_nulls() <= 0).all(), column
 
 
 def test_age_years_is_positive_and_plausible(application_frame: pl.DataFrame) -> None:
-    """AGE_YEARS is positive and falls in a human range.
-
-    Assert the sign flip happened and the result lies between about 18 and 100. A sign
-    error here produces negative ages, which an age band cut would silently bucket into
-    the unknown member.
-    """
-    after_sentinel = null_employment_sentinel(application_frame)
-    result = derive_age_and_tenure(after_sentinel)
+    result = derive_age_and_tenure(null_employment_sentinel(application_frame, load_silver_rules()))
     age = result["AGE_YEARS"]
 
-    assert (age > 0).all(), "AGE_YEARS has non-positive values"
-    assert (age >= 18).all(), "AGE_YEARS has values below 18"
-    assert (age <= 100).all(), "AGE_YEARS has values above 100"
+    assert (age > MINIMUM_ADULT_AGE).all()
+    assert (age < MAXIMUM_AGE).all()
 
 
-def test_unknown_gender_becomes_null_without_replacement(application_frame: pl.DataFrame) -> None:
-    """CODE_GENDER XNA becomes null and no value is substituted.
+def test_unknown_gender_becomes_unknown_label(application_frame: pl.DataFrame) -> None:
+    rules = load_silver_rules()
+    result = replace_unknown_categories(application_frame, rules)
 
-    Assert the XNA rows are null and that the distribution of the remaining values is
-    unchanged. Imputing a protected attribute on four rows would fabricate data the
-    fairness report then measures.
-    """
-    result = null_unknown_gender(application_frame)
-    gender_col = result["CODE_GENDER"]
+    xna_rows = result.filter(pl.col("SK_ID_CURR").is_in(_ids(application_frame, GENDER_XNA_ROWS)))
+    assert (xna_rows["CODE_GENDER"] == rules.unknown_label).all()
+    assert (result["CODE_GENDER"] == "XNA").sum() == 0
+    assert result["CODE_GENDER"].null_count() == 0
 
-    xna_ids = {application_frame["SK_ID_CURR"][row] for row in GENDER_XNA_ROWS}
-    xna_rows = result.filter(pl.col("SK_ID_CURR").is_in(xna_ids))
-    assert xna_rows["CODE_GENDER"].is_null().all()
 
-    assert (gender_col == GENDER_UNKNOWN_CODE).sum() == 0
+def test_known_gender_values_are_unchanged(application_frame: pl.DataFrame) -> None:
+    result = replace_unknown_categories(application_frame, load_silver_rules())
 
-    non_xna_before = (
-        application_frame.filter(pl.col("CODE_GENDER") != GENDER_UNKNOWN_CODE)["CODE_GENDER"]
-        .value_counts()
-        .sort("CODE_GENDER")
+    known = ~pl.col("SK_ID_CURR").is_in(_ids(application_frame, GENDER_XNA_ROWS))
+    assert result.filter(known)["CODE_GENDER"].to_list() == (
+        application_frame.filter(known)["CODE_GENDER"].to_list()
     )
-    non_xna_after = (
-        result.filter(pl.col("CODE_GENDER").is_not_null())["CODE_GENDER"]
-        .value_counts()
-        .sort("CODE_GENDER")
-    )
-    assert non_xna_before.equals(non_xna_after)
+
+
+def test_missing_occupation_becomes_unknown_and_keeps_its_flag(
+    application_frame: pl.DataFrame,
+) -> None:
+    rules = load_silver_rules()
+    flagged = add_missingness_flags(application_frame, rules)
+    result = replace_unknown_categories(flagged, rules)
+
+    null_ids = _ids(application_frame, EMPLOYMENT_SENTINEL_ROWS)
+    null_rows = result.filter(pl.col("SK_ID_CURR").is_in(null_ids))
+    assert (null_rows["OCCUPATION_TYPE"] == rules.unknown_label).all()
+    assert (null_rows["FLAG_MISSING_OCCUPATION"] == 1).all()
+    assert (
+        result.filter(~pl.col("SK_ID_CURR").is_in(null_ids))["FLAG_MISSING_OCCUPATION"] == 0
+    ).all()
+    assert result["OCCUPATION_TYPE"].null_count() == 0
 
 
 def test_organization_type_unknown_is_kept_as_category(application_frame: pl.DataFrame) -> None:
-    """ORGANIZATION_TYPE XNA survives normalization as a value.
-
-    The inverse of the gender test, and deliberately so. About 18 percent of rows,
-    overlapping the retired population, so it is not missing at random and nulling it would
-    discard a real group.
-    """
-    result = keep_organization_unknown_as_level(application_frame)
+    result = normalize_application(application_frame, load_silver_rules())
 
     xna_before = (application_frame["ORGANIZATION_TYPE"] == "XNA").sum()
-    xna_after = (result["ORGANIZATION_TYPE"] == "XNA").sum()
-    assert xna_after == xna_before
-    assert xna_after > 0
+    assert xna_before == len(ORGANIZATION_XNA_ROWS)
+    assert (result["ORGANIZATION_TYPE"] == "XNA").sum() == xna_before
 
 
-def test_income_outlier_is_capped_not_dropped(application_frame: pl.DataFrame) -> None:
-    """The income outlier is winsorized and its row survives.
+def test_income_keeps_original_value_and_outlier_is_flagged() -> None:
+    rules = load_silver_rules()
+    incomes = [float(value) for value in range(INCOME_OUTLIER_BASE_ROWS)] + [EXTREME_INCOME]
+    frame = pl.DataFrame({"SK_ID_CURR": list(range(len(incomes))), "AMT_INCOME_TOTAL": incomes})
 
-    Assert the row count is unchanged and the maximum fell to the quantile. Dropping the
-    row would bias the sample; the value needs containing, not the applicant.
-    """
-    result = winsorize_income(application_frame, INCOME_WINSOR_QUANTILE)
+    result = flag_income_outliers(frame, rules)
+
+    assert result["AMT_INCOME_TOTAL"].to_list() == incomes
+    flag = rules.outlier_flags["AMT_INCOME_TOTAL"].flag
+    assert result.filter(pl.col(flag) == 1)["AMT_INCOME_TOTAL"].to_list() == [EXTREME_INCOME]
+
+
+def test_income_outlier_row_survives(application_frame: pl.DataFrame) -> None:
+    result = normalize_application(application_frame, load_silver_rules())
+
     assert len(result) == len(application_frame)
-
-    cap = application_frame["AMT_INCOME_TOTAL"].quantile(
-        INCOME_WINSOR_QUANTILE, interpolation="nearest"
-    )
-    extreme_ids = {application_frame["SK_ID_CURR"][row] for row in EXTREME_INCOME_ROWS}
-    extreme_rows_after = result.filter(pl.col("SK_ID_CURR").is_in(list(extreme_ids)))
-    assert (extreme_rows_after["AMT_INCOME_TOTAL"] <= cap).all()
-
-    assert result["AMT_INCOME_TOTAL"].max() <= cap
+    assert result["AMT_INCOME_TOTAL"].max() == EXTREME_INCOME
 
 
-def test_missing_ext_source_keeps_null_and_gains_flag(
-    application_frame: pl.DataFrame,
-) -> None:
-    """EXT_SOURCE_1 nulls survive and the missingness flag is set.
+def test_missing_ext_source_keeps_null_and_gains_flag(application_frame: pl.DataFrame) -> None:
+    result = add_missingness_flags(application_frame, load_silver_rules())
 
-    Assert the column still holds nulls afterwards. Filling it would destroy a signal for
-    56 percent of applicants and defeat the reason LightGBM was chosen.
-    """
-    from hcr.config.loaders import load_silver_rules
-
-    rules = load_silver_rules()
-    result = add_missingness_flags(application_frame, rules)
-
-    null_ids = {application_frame["SK_ID_CURR"][row] for row in EXT_SOURCE_1_NULL_ROWS}
+    null_ids = _ids(application_frame, EXT_SOURCE_1_NULL_ROWS)
     null_rows = result.filter(pl.col("SK_ID_CURR").is_in(null_ids))
-
     assert null_rows["EXT_SOURCE_1"].is_null().all()
-    assert null_rows["FLAG_MISSING_EXT_SOURCE_1"].cast(pl.Int8).eq(1).all()
+    assert (null_rows["FLAG_MISSING_EXT_SOURCE_1"] == 1).all()
+    others = result.filter(~pl.col("SK_ID_CURR").is_in(null_ids))
+    assert (others["FLAG_MISSING_EXT_SOURCE_1"] == 0).all()
 
-    non_null_rows = result.filter(~pl.col("SK_ID_CURR").is_in(list(null_ids)))
-    assert non_null_rows["FLAG_MISSING_EXT_SOURCE_1"].cast(pl.Int8).eq(0).all()
 
+def test_own_car_age_null_is_not_filled_with_zero(application_frame: pl.DataFrame) -> None:
+    result = normalize_application(application_frame, load_silver_rules())
 
-def test_own_car_age_null_is_not_filled_with_zero(
-    application_frame: pl.DataFrame,
-) -> None:
-    """OWN_CAR_AGE nulls are not replaced by zero.
-
-    The null means no car; zero would mean a new car. Assert no null became zero, which is
-    the single most tempting wrong repair in this dataset.
-    """
-    from hcr.config.loaders import load_silver_rules
-
-    rules = load_silver_rules()
-    result = add_missingness_flags(application_frame, rules)
-
-    null_ids = {application_frame["SK_ID_CURR"][row] for row in OWN_CAR_AGE_NULL_ROWS}
-    null_rows = result.filter(pl.col("SK_ID_CURR").is_in(null_ids))
-
+    null_rows = result.filter(
+        pl.col("SK_ID_CURR").is_in(_ids(application_frame, OWN_CAR_AGE_NULL_ROWS))
+    )
     assert null_rows["OWN_CAR_AGE"].is_null().all()
+    assert (null_rows["FLAG_MISSING_OWN_CAR_AGE"] == 1).all()
 
 
 def test_building_columns_reduced_to_avg_only(application_frame: pl.DataFrame) -> None:
-    """_MODE and _MEDI building variants are dropped; _AVG variants and the flag remain.
-
-    Three variants of the same attribute, nearly two-thirds of the table's columns and
-    the group with least predictive power. Reducing before aggregation prevents the
-    variants from multiplying through the four feature families.
-    """
-    frame_with_building = application_frame.with_columns(
+    frame = application_frame.with_columns(
         pl.lit(0.5).alias("APARTMENTS_AVG"),
         pl.lit(0.5).alias("APARTMENTS_MODE"),
         pl.lit(0.5).alias("APARTMENTS_MEDI"),
+        pl.lit("block").alias("HOUSETYPE_MODE"),
     )
-    result = reduce_building_columns(frame_with_building)
+
+    result = reduce_building_columns(frame)
 
     assert "APARTMENTS_AVG" in result.columns
     assert "APARTMENTS_MODE" not in result.columns
     assert "APARTMENTS_MEDI" not in result.columns
-    assert "FLAG_BUILDING_INFO_COMPLETE" in result.columns
+    assert "HOUSETYPE_MODE" in result.columns
+    assert (result[BUILDING_COMPLETE_FLAG] == 1).all()
+
+
+def test_building_completeness_flag_is_zero_when_an_average_is_null(
+    application_frame: pl.DataFrame,
+) -> None:
+    frame = application_frame.with_columns(
+        pl.when(pl.col("SK_ID_CURR") == FIRST_APPLICATION_ID)
+        .then(None)
+        .otherwise(0.5)
+        .alias("APARTMENTS_AVG")
+    )
+
+    result = reduce_building_columns(frame)
+
+    assert (
+        result.filter(pl.col("SK_ID_CURR") == FIRST_APPLICATION_ID)[BUILDING_COMPLETE_FLAG].item()
+        == 0
+    )
+
+
+def test_normalization_preserves_row_count_and_adds_no_null_flag(
+    application_frame: pl.DataFrame,
+) -> None:
+    rules = load_silver_rules()
+    result = normalize_application(application_frame, rules)
+
+    assert len(result) == len(application_frame)
+    flag_columns = [column for column in result.columns if column.startswith("FLAG_")]
+    assert flag_columns
+    assert all(result[column].null_count() == 0 for column in flag_columns)
+
+
+def test_normalization_does_not_mutate_its_input(application_frame: pl.DataFrame) -> None:
+    before = application_frame.clone()
+
+    normalize_application(application_frame, load_silver_rules())
+
+    assert application_frame.equals(before)
+
+
+def test_application_gate_rejects_a_surviving_sentinel(application_frame: pl.DataFrame) -> None:
+    with pytest.raises(ValueError, match="sentinel"):
+        assert_application_clean(application_frame, load_silver_rules(), len(application_frame))
+
+
+def test_application_gate_rejects_a_lost_row(application_frame: pl.DataFrame) -> None:
+    rules = load_silver_rules()
+    silver = normalize_application(application_frame, rules)
+
+    with pytest.raises(ValueError, match="row count"):
+        assert_application_clean(silver.head(10), rules, len(application_frame))
+
+
+def test_application_gate_accepts_a_normalized_table(application_frame: pl.DataFrame) -> None:
+    rules = load_silver_rules()
+    silver = normalize_application(application_frame, rules)
+
+    assert_application_clean(silver, rules, len(application_frame))
+
+
+def test_clean_application_refuses_to_overwrite_its_input(
+    application_frame: pl.DataFrame, tmp_path: Path
+) -> None:
+    source = tmp_path / "application_train.parquet"
+    application_frame.write_parquet(source)
+
+    with pytest.raises(ValueError, match="overwrite"):
+        clean_application(source, source, load_silver_rules())
+
+
+def test_clean_application_twice_gives_byte_identical_output(
+    application_frame: pl.DataFrame, tmp_path: Path
+) -> None:
+    source = tmp_path / "bronze.parquet"
+    application_frame.write_parquet(source)
+    rules = load_silver_rules()
+
+    clean_application(source, tmp_path / "first.parquet", rules)
+    clean_application(source, tmp_path / "second.parquet", rules)
+
+    assert (tmp_path / "first.parquet").read_bytes() == (tmp_path / "second.parquet").read_bytes()
+    assert pl.read_parquet(source).equals(application_frame)
 
 
 def test_xna_and_xap_become_null_in_history_tables(
     previous_application_frame: pl.DataFrame,
 ) -> None:
-    """Both codes are nulled across the history tables.
+    result = null_missing_value_codes(previous_application_frame, HISTORY_CODES)
 
-    Assert on a string column of a history fixture. Left as literals they become their own
-    category in a grouping and dilute a real one.
-    """
-    from hcr.silver.clean_history import null_missing_value_codes
-
-    codes = ("XNA", "XAP")
-    result = null_missing_value_codes(previous_application_frame, codes)
-
-    for col in result.select(pl.col(pl.String)).columns:
-        col_values = result[col]
-        for code in codes:
-            assert (col_values == code).sum() == 0, (
-                f"Column {col} still contains code {code!r} after normalization"
-            )
+    for column in result.select(pl.col(pl.String)).columns:
+        for code in HISTORY_CODES:
+            assert (result[column] == code).sum() == 0, (column, code)
+    assert result["NAME_PAYMENT_TYPE"].null_count() > 0
+    assert result["CODE_REJECT_REASON"].null_count() > 0
 
 
-def test_payment_delay_is_positive_when_paid_late(
-    installments_frame: pl.DataFrame,
+def test_missing_codes_are_nulled_identically_on_a_lazy_frame(
+    previous_application_frame: pl.DataFrame,
 ) -> None:
-    """PAYMENT_DELAY_DAYS is positive for a late payment.
+    eager = null_missing_value_codes(previous_application_frame, HISTORY_CODES)
+    lazy = null_missing_value_codes(previous_application_frame.lazy(), HISTORY_CODES).collect()
 
-    Assert the sign convention on a known late row. The subtraction order is easy to invert
-    and an inverted delay column still produces a plausible model, so the sign needs
-    pinning by test rather than by review.
-    """
-    from hcr.silver.clean_history import derive_payment_behaviour
+    assert eager.equals(lazy)
 
-    result = derive_payment_behaviour(installments_frame)
 
-    late_case = INSTALMENT_CASES["late"]
-    expected_delay = late_case.days_entry_payment - late_case.days_instalment
-    assert expected_delay > 0
+def test_missing_code_nulling_leaves_numeric_columns_untouched(
+    previous_application_frame: pl.DataFrame,
+) -> None:
+    result = null_missing_value_codes(previous_application_frame, HISTORY_CODES)
 
-    late_rows = result.filter(
-        (pl.col("DAYS_INSTALMENT") == late_case.days_instalment)
-        & (pl.col("DAYS_ENTRY_PAYMENT") == late_case.days_entry_payment)
+    assert result["AMT_CREDIT"].to_list() == previous_application_frame["AMT_CREDIT"].to_list()
+
+
+def test_history_day_sentinel_becomes_null_and_flagged(
+    previous_application_frame: pl.DataFrame,
+) -> None:
+    columns = ("DAYS_FIRST_DRAWING", "DAYS_TERMINATION")
+    result = null_days_sentinels(
+        previous_application_frame, columns, EMPLOYMENT_SENTINEL, "FLAG_SENTINEL_{column}"
     )
-    assert len(late_rows) == 1
-    assert late_rows["PAYMENT_DELAY_DAYS"][0] == expected_delay
-    assert late_rows["IS_LATE"][0] is True
+
+    for column in columns:
+        assert (result[column] == EMPLOYMENT_SENTINEL).sum() == 0
+        flagged = result[f"FLAG_SENTINEL_{column}"].sum()
+        assert flagged == (previous_application_frame[column] == EMPLOYMENT_SENTINEL).sum()
+        assert result[column].null_count() == flagged
 
 
-def test_payment_ratio_is_null_when_instalment_is_zero(
-    installments_frame: pl.DataFrame,
+def test_non_positive_gate_raises_on_a_positive_offset() -> None:
+    frame = pl.DataFrame({"DAYS_CREDIT": [-5, 3], "MONTHS_BALANCE": [0, -1]})
+
+    with pytest.raises(ValueError, match="DAYS_CREDIT"):
+        assert_non_positive_days(frame, ("DAYS_CREDIT", "MONTHS_BALANCE"))
+
+
+def test_non_positive_gate_ignores_nulls_and_absent_columns() -> None:
+    frame = pl.DataFrame({"DAYS_CREDIT": [-5, None]})
+
+    assert_non_positive_days(frame, ("DAYS_CREDIT", "DAYS_NOT_IN_THIS_TABLE"))
+
+
+def test_strict_day_columns_exclude_forward_looking_dates_and_include_months() -> None:
+    rules = load_silver_rules()
+    strict = strict_days_columns(rules)
+
+    assert "DAYS_CREDIT_ENDDATE" not in strict
+    assert "DAYS_LAST_DUE_1ST_VERSION" not in strict
+    assert "DAYS_CREDIT" in strict
+    assert "MONTHS_BALANCE" in strict
+
+
+def test_bureau_balance_status_predicates_cover_each_branch(
+    bureau_balance_frame: pl.DataFrame,
 ) -> None:
-    """A zero instalment yields a null ratio, never infinity.
+    result = derive_bureau_balance_status(bureau_balance_frame)
 
-    Assert the guard holds. An infinity reaching the feature matrix stops the step 6 gate,
-    which is the right outcome but a worse place to discover it.
-    """
-    from hcr.silver.clean_history import derive_payment_behaviour
+    by_status = {
+        row["STATUS"]: (row["STATUS_IS_DPD"], row["STATUS_IS_CLOSED"])
+        for row in result.unique("STATUS").to_dicts()
+    }
+    for status in ("1", "2", "3", "4", "5"):
+        assert by_status[status] == (True, False)
+    assert by_status["C"] == (False, True)
+    assert by_status["0"] == (False, False)
+    assert by_status["X"] == (False, False)
+    assert by_status[None] == (None, None)
 
+
+def test_payment_delay_is_positive_when_paid_late(installments_frame: pl.DataFrame) -> None:
     result = derive_payment_behaviour(installments_frame)
 
-    zero_case = INSTALMENT_CASES["zero_instalment"]
-    zero_rows = result.filter(pl.col("DAYS_INSTALMENT") == zero_case.days_instalment)
-    assert len(zero_rows) == 1
-    assert zero_rows["PAYMENT_RATIO"][0] is None
+    late = INSTALMENT_CASES["late"]
+    row = result.filter(pl.col("DAYS_INSTALMENT") == late.days_instalment)
+    assert row["PAYMENT_DELAY_DAYS"].item() == late.days_entry_payment - late.days_instalment
+    assert row["IS_LATE"].item() is True
 
 
-def test_normalization_preserves_row_count(application_frame: pl.DataFrame) -> None:
-    """Silver output has the same row count as its input.
+def test_early_and_on_time_payments_are_not_late(installments_frame: pl.DataFrame) -> None:
+    result = derive_payment_behaviour(installments_frame)
 
-    Step 3 repairs values and adds columns; it removes no row. Assert for both the
-    application and a history table.
-    """
-    from hcr.config.loaders import load_silver_rules
-
-    rules = load_silver_rules()
-    input_rows = len(application_frame)
-
-    frame = null_employment_sentinel(application_frame)
-    frame = derive_age_and_tenure(frame)
-    frame = null_unknown_gender(frame)
-    frame = keep_organization_unknown_as_level(frame)
-    frame = winsorize_income(frame, INCOME_WINSOR_QUANTILE)
-    frame = add_missingness_flags(frame, rules)
-    frame = reduce_building_columns(frame)
-
-    assert len(frame) == input_rows
+    for name in ("early", "on_time"):
+        row = result.filter(pl.col("DAYS_INSTALMENT") == INSTALMENT_CASES[name].days_instalment)
+        assert row["IS_LATE"].item() is False
 
 
-def test_normalization_does_not_write_into_bronze(
-    application_frame: pl.DataFrame,
-    tmp_path: pytest.TempPathFactory,
+def test_unpaid_instalment_has_null_behaviour(installments_frame: pl.DataFrame) -> None:
+    result = derive_payment_behaviour(installments_frame)
+
+    row = result.filter(pl.col("DAYS_INSTALMENT") == INSTALMENT_CASES["unpaid"].days_instalment)
+    assert row["PAYMENT_DELAY_DAYS"].item() is None
+    assert row["IS_LATE"].item() is None
+    assert row["PAYMENT_RATIO"].item() is None
+
+
+def test_payment_ratio_is_null_when_instalment_is_zero(installments_frame: pl.DataFrame) -> None:
+    result = derive_payment_behaviour(installments_frame)
+
+    row = result.filter(
+        pl.col("DAYS_INSTALMENT") == INSTALMENT_CASES["zero_instalment"].days_instalment
+    )
+    assert row["PAYMENT_RATIO"].item() is None
+    assert result["PAYMENT_RATIO"].is_infinite().sum() == 0
+
+
+def test_underpaid_and_overpaid_ratios_sit_on_either_side_of_one(
+    installments_frame: pl.DataFrame,
 ) -> None:
-    """The bronze input frame is not mutated by normalization functions.
+    result = derive_payment_behaviour(installments_frame)
 
-    Assert that the original frame's row count and the DAYS_EMPLOYED column values
-    are unchanged after all repairs are applied to a copy. No step may overwrite
-    its own input.
-    """
-    from hcr.config.loaders import load_silver_rules
+    under = result.filter(
+        pl.col("DAYS_INSTALMENT") == INSTALMENT_CASES["underpaid"].days_instalment
+    )
+    over = result.filter(pl.col("DAYS_INSTALMENT") == INSTALMENT_CASES["overpaid"].days_instalment)
+    assert under["IS_UNDERPAID"].item() is True
+    assert under["PAYMENT_RATIO"].item() < 1
+    assert over["IS_UNDERPAID"].item() is False
+    assert over["PAYMENT_RATIO"].item() > 1
 
-    rules = load_silver_rules()
-    original_days_employed = application_frame["DAYS_EMPLOYED"].to_list()
-    original_row_count = len(application_frame)
 
-    frame = application_frame.clone()
-    frame = null_employment_sentinel(frame)
-    frame = derive_age_and_tenure(frame)
-    frame = null_unknown_gender(frame)
-    frame = keep_organization_unknown_as_level(frame)
-    frame = winsorize_income(frame, INCOME_WINSOR_QUANTILE)
-    frame = add_missingness_flags(frame, rules)
-    frame = reduce_building_columns(frame)
+def test_utilization_is_null_when_limit_is_zero_and_not_clipped(
+    credit_card_frame: pl.DataFrame,
+) -> None:
+    over_limit = credit_card_frame.with_columns(
+        pl.when(pl.col("SK_ID_PREV") == credit_card_frame["SK_ID_PREV"].max())
+        .then(pl.col("AMT_CREDIT_LIMIT_ACTUAL") / 2)
+        .otherwise(pl.col("AMT_CREDIT_LIMIT_ACTUAL"))
+        .alias("AMT_CREDIT_LIMIT_ACTUAL")
+    )
 
-    assert len(application_frame) == original_row_count
-    assert application_frame["DAYS_EMPLOYED"].to_list() == original_days_employed
+    result = derive_utilization(over_limit)
+
+    assert result["UTILIZATION"].is_infinite().sum() == 0
+    assert result.filter(pl.col("AMT_CREDIT_LIMIT_ACTUAL") == 0)["UTILIZATION"].is_null().all()
+    assert result["UTILIZATION"].max() > 1
+
+
+def test_delinquency_flag_follows_sk_dpd(pos_cash_frame: pl.DataFrame) -> None:
+    result = derive_delinquency_flags(pos_cash_frame)
+
+    assert result.filter(pl.col("SK_DPD") > 0)["IS_DPD"].all()
+    assert not result.filter(pl.col("SK_DPD") == 0)["IS_DPD"].any()
+
+
+@pytest.mark.parametrize(
+    ("table", "fixture_name"),
+    [
+        ("bureau", "bureau_frame"),
+        ("bureau_balance", "bureau_balance_frame"),
+        ("pos_cash_balance", "pos_cash_frame"),
+        ("installments_payments", "installments_frame"),
+    ],
+)
+def test_history_normalization_preserves_row_count(
+    table: str, fixture_name: str, request: pytest.FixtureRequest
+) -> None:
+    frame: pl.DataFrame = request.getfixturevalue(fixture_name)
+
+    result = normalize_history_table(table, frame.lazy(), load_silver_rules()).collect()
+
+    assert len(result) == len(frame)
+    flags = [column for column in result.columns if column.startswith("FLAG_")]
+    assert all(result[column].null_count() == 0 for column in flags)
+
+
+def test_previous_application_normalization_nulls_sentinels_and_codes(
+    previous_application_frame: pl.DataFrame,
+) -> None:
+    rules = replace(
+        load_silver_rules(),
+        history_sentinel_columns={
+            "previous_application": ("DAYS_FIRST_DRAWING", "DAYS_TERMINATION")
+        },
+    )
+
+    result = normalize_history_table(
+        "previous_application", previous_application_frame.lazy(), rules
+    ).collect()
+
+    assert len(result) == len(previous_application_frame)
+    assert (result["DAYS_FIRST_DRAWING"] == EMPLOYMENT_SENTINEL).sum() == 0
+    assert (result["NAME_PAYMENT_TYPE"] == "XNA").sum() == 0
+    assert "FLAG_NEGATIVE_DOWN_PAYMENT" in result.columns

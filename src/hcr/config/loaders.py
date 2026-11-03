@@ -17,6 +17,8 @@ from hcr.config.models import CostConfig, DataContract, FeatureSpec, ModelConfig
 from hcr.config.rules import (
     parse_acceptance,
     parse_employment_sentinel,
+    parse_history_sentinels,
+    parse_outlier_flags,
     parse_table_contract,
     validate_cost_fractions,
     validate_model_rules,
@@ -67,7 +69,9 @@ SILVER_RULES_KEYS: Final = (
     "derived_columns",
     "missingness_flags",
     "history_presence_flags",
-    "winsorize",
+    "outlier_flags",
+    "unknown_category",
+    "days_sentinel_in_history",
 )
 
 FEATURE_SPEC_KEYS: Final = (
@@ -152,8 +156,15 @@ def load_silver_rules(path: Path | None = None) -> SilverRules:
     data = load_yaml(source)
     require_keys(data, SILVER_RULES_KEYS, source)
     missing_codes = require_section(data, "missing_value_codes", ("codes",), source)
-    days_section = require_section(data, "days_columns_sign", ("columns",), source)
-    winsorize = parse_nested_field(data["winsorize"], "winsorize", "upper_quantile", source)
+    days_section = require_section(
+        data, "days_columns_sign", ("columns", "forward_looking_columns"), source
+    )
+    unknown = require_section(
+        data, "unknown_category", ("label", "xna_to_unknown", "null_to_unknown"), source
+    )
+    history_sentinels = require_mapping(
+        data["days_sentinel_in_history"], "days_sentinel_in_history", source
+    )
 
     return SilverRules(
         employment_sentinel=parse_employment_sentinel(data["employment_sentinel"], source),
@@ -162,6 +173,15 @@ def load_silver_rules(path: Path | None = None) -> SilverRules:
         ),
         days_columns=require_string_tuple(
             days_section["columns"], "days_columns_sign.columns", source
+        ),
+        forward_looking_days_columns=require_string_tuple(
+            days_section["forward_looking_columns"],
+            "days_columns_sign.forward_looking_columns",
+            source,
+        ),
+        history_sentinel_columns=parse_history_sentinels(history_sentinels, source),
+        history_sentinel_flag_template=require_string(
+            history_sentinels["flag_template"], "days_sentinel_in_history.flag_template", source
         ),
         derived_columns=parse_nested_field(
             data["derived_columns"], "derived_columns", "expression", source
@@ -172,10 +192,14 @@ def load_silver_rules(path: Path | None = None) -> SilverRules:
         history_presence_flags=parse_string_mapping(
             data["history_presence_flags"], "history_presence_flags", source
         ),
-        winsorize={
-            column: require_number(quantile, f"winsorize.{column}.upper_quantile", source)
-            for column, quantile in winsorize.items()
-        },
+        outlier_flags=parse_outlier_flags(data["outlier_flags"], source),
+        unknown_label=require_string(unknown["label"], "unknown_category.label", source),
+        xna_to_unknown_columns=require_string_tuple(
+            unknown["xna_to_unknown"], "unknown_category.xna_to_unknown", source
+        ),
+        null_to_unknown_columns=require_string_tuple(
+            unknown["null_to_unknown"], "unknown_category.null_to_unknown", source
+        ),
     )
 
 

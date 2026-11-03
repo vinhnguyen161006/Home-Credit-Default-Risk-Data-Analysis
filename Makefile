@@ -38,7 +38,7 @@ silver:
 	$(PY) -m hcr.silver.clean_application
 	$(PY) -m hcr.silver.clean_history
 	$(PY) -m hcr.silver.flags
-	
+
 split:
 	$(PY) -m hcr.split.make_holdout
 

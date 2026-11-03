@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
-from hcr.config.models import TableContract
+from hcr.config.models import OutlierFlag, TableContract
 from hcr.config.values import (
     ConfigError,
     parse_string_mapping,
@@ -25,6 +25,7 @@ from hcr.config.values import (
 )
 
 EMPLOYMENT_SENTINEL_VALUE: Final = 365243
+HISTORY_SENTINEL_PLACEHOLDER: Final = "{column}"
 FEATURE_PREFIXES: Final = frozenset({"APP", "BURO", "BB", "PREV", "POS", "INST", "CC"})
 FIRST_STAGE: Final = 1
 SYNTHETIC_OVERSAMPLING_FORBIDDEN: Final = "forbidden"
@@ -74,6 +75,48 @@ def parse_employment_sentinel(value: Any, source: Path) -> dict[str, Any]:
         )
     require_string(sentinel["emit_flag"], "employment_sentinel.emit_flag", source)
     return sentinel
+
+
+def parse_outlier_flags(value: Any, source: Path) -> dict[str, OutlierFlag]:
+    """Build the outlier flag declarations, asserting each quantile is a proper fraction.
+
+    A quantile outside (0, 1) would flag every row or none, and either result looks like a
+    plausible column rather than an error.
+    """
+    section = strip_annotations(require_mapping(value, "outlier_flags", source))
+    flags: dict[str, OutlierFlag] = {}
+    for column, entry in section.items():
+        declaration = require_mapping(entry, f"outlier_flags.{column}", source)
+        require_keys(declaration, ("upper_quantile", "flag"), source)
+        quantile = require_number(
+            declaration["upper_quantile"], f"outlier_flags.{column}.upper_quantile", source
+        )
+        if not 0 < quantile < 1:
+            raise ConfigError(f"{source}: outlier_flags.{column}.upper_quantile must lie in (0, 1)")
+        flags[column] = OutlierFlag(
+            upper_quantile=quantile,
+            flag=require_string(declaration["flag"], f"outlier_flags.{column}.flag", source),
+        )
+    return flags
+
+
+def parse_history_sentinels(value: Any, source: Path) -> dict[str, tuple[str, ...]]:
+    """Return table to sentinel column names, asserting the flag template names its column."""
+    section = require_mapping(value, "days_sentinel_in_history", source)
+    require_keys(section, ("columns", "flag_template"), source)
+    template = require_string(
+        section["flag_template"], "days_sentinel_in_history.flag_template", source
+    )
+    if HISTORY_SENTINEL_PLACEHOLDER not in template:
+        raise ConfigError(
+            f"{source}: days_sentinel_in_history.flag_template must contain "
+            f"{HISTORY_SENTINEL_PLACEHOLDER}"
+        )
+    tables = strip_annotations(require_mapping(section["columns"], "columns", source))
+    return {
+        table: require_string_tuple(columns, f"days_sentinel_in_history.columns.{table}", source)
+        for table, columns in tables.items()
+    }
 
 
 def validate_prefixes(

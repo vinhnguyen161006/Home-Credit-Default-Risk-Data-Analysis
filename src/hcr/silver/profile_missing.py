@@ -1,41 +1,61 @@
-"""Show missing values in application data."""
+"""Exploratory profiling of missing values in the bronze tables.
+
+Pandas serves exploration here and nothing else. The silver transformations live in
+Polars, so no cleaning rule is stated twice. Run it to see where nulls concentrate before
+deciding whether a column needs a flag.
+"""
+
+from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+from hcr.paths import data_dir
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
 logger = logging.getLogger(__name__)
 
-bronze_folder = Path(__file__).resolve().parents[3] / "data" / "bronze"
+BRONZE_GLOB = "*.parquet"
+PERCENT = 100
+DISPLAY_DECIMALS = 2
 
-for source in sorted(bronze_folder.glob("*.parquet")):
-    df = pd.read_parquet(source)
 
-    if df.empty:
-        logger.info("%s: empty table", source.name)
-        del df
-        continue
-
-    missing_count = df.isna().sum()
-    missing_percent = missing_count / len(df) * 100
-
+def summarize_missing_values(table: pd.DataFrame) -> pd.DataFrame:
+    """Return the columns holding nulls with their count and percentage, worst first."""
+    missing_count = table.isna().sum()
     summary = pd.DataFrame(
         {
             "missing_count": missing_count,
-            "missing_percent": missing_percent,
+            "missing_percent": missing_count / len(table) * PERCENT,
         }
     )
+    return summary[summary["missing_count"] > 0].sort_values("missing_count", ascending=False)
 
-    summary = summary[summary["missing_count"] > 0]
-    summary = summary.sort_values("missing_count", ascending=False)
 
-    logger.info("\nDataset: %s | Rows: %s", source.name, f"{len(df):,}")
-
+def profile_file(source: Path) -> None:
+    """Log the missing-value summary of one Parquet file."""
+    table = pd.read_parquet(source)
+    if table.empty:
+        logger.info("%s: empty table", source.name)
+        return
+    summary = summarize_missing_values(table)
+    logger.info("Dataset: %s | Rows: %s", source.name, f"{len(table):,}")
     if summary.empty:
         logger.info("No missing values.")
-    else:
-        logger.info("\n%s", summary.round(2).to_string())
+        return
+    logger.info("\n%s", summary.round(DISPLAY_DECIMALS).to_string())
 
-    del df
+
+def main() -> None:
+    """Profile every bronze table, one at a time to bound memory."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    for source in sorted((data_dir() / "bronze").glob(BRONZE_GLOB)):
+        profile_file(source)
+
+
+if __name__ == "__main__":
+    main()

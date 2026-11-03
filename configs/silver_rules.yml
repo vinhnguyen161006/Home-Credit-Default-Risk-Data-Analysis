@@ -51,6 +51,30 @@ days_columns_sign:
     - DAYS_TERMINATION
     - DAYS_INSTALMENT
     - DAYS_ENTRY_PAYMENT
+  forward_looking_columns:
+    - DAYS_CREDIT_ENDDATE
+    - DAYS_CREDIT_UPDATE
+    - DAYS_LAST_DUE_1ST_VERSION
+  forward_looking_rationale: >-
+    Exempt from the non-positive assertion because they hold dates that legitimately
+    fall after the application: a planned loan end, a scheduled last due date, and 17
+    bureau update stamps. Measured on bronze, 602603 bureau rows have a positive
+    DAYS_CREDIT_ENDDATE and 224392 previous applications have a positive
+    DAYS_LAST_DUE_1ST_VERSION once the sentinel is removed.
+
+days_sentinel_in_history:
+  columns:
+    previous_application:
+      - DAYS_FIRST_DRAWING
+      - DAYS_FIRST_DUE
+      - DAYS_LAST_DUE_1ST_VERSION
+      - DAYS_LAST_DUE
+      - DAYS_TERMINATION
+  flag_template: FLAG_SENTINEL_{column}
+  rationale: >-
+    The same code as employment_sentinel.value, 365243. Every positive value in these columns
+    other than DAYS_LAST_DUE_1ST_VERSION is the sentinel. It becomes null and a flag
+    records that the date never applied.
 
 derived_columns:
   AGE_YEARS:
@@ -61,11 +85,16 @@ derived_columns:
     expression: -DAYS_EMPLOYED / 365.25
     note: Null wherever the employment sentinel applied.
 
-categorical_to_null:
-  CODE_GENDER:
-    values: [XNA]
-    emit_flag: null
-    note: Four rows. No replacement value is assigned.
+unknown_category:
+  label: Unknown
+  xna_to_unknown:
+    - CODE_GENDER
+  null_to_unknown:
+    - OCCUPATION_TYPE
+  note: >-
+    Agreed rule: four XNA gender rows become the label Unknown. A missing occupation
+    becomes Unknown only after its missingness flag is set, so
+    the flag still records which rows were originally null.
 
 categorical_keep_as_level:
   ORGANIZATION_TYPE:
@@ -74,11 +103,14 @@ categorical_keep_as_level:
       About 18 percent, overlapping almost entirely with the retired population.
       Not missing at random, so it stays a category of its own.
 
-winsorize:
+outlier_flags:
   AMT_INCOME_TOTAL:
     upper_quantile: 0.999
-    drop_rows: false
-    note: Single extreme value at 117000000. Never drop the row.
+    flag: FLAG_INCOME_OUTLIER
+    note: >-
+      The original value is kept. The flag marks rows above the 99.9th percentile,
+      including the single extreme value at 117000000. Never drop the row and never
+      cap the value.
 
 missingness_flags:
   rationale: >-
@@ -89,6 +121,8 @@ missingness_flags:
   EXT_SOURCE_3: FLAG_MISSING_EXT_SOURCE_3
   OWN_CAR_AGE: FLAG_MISSING_OWN_CAR_AGE
   OCCUPATION_TYPE: FLAG_MISSING_OCCUPATION
+  AMT_ANNUITY: FLAG_MISSING_AMT_ANNUITY
+  AMT_GOODS_PRICE: FLAG_MISSING_AMT_GOODS_PRICE
 
 keep_null_never_fill:
   EXT_SOURCE_1:
