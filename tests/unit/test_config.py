@@ -127,6 +127,38 @@ def test_silver_rules_strip_annotation_keys() -> None:
     assert rules.employment_sentinel["emit_flag"] == "FLAG_NO_EMPLOYMENT"
 
 
+def test_silver_rules_hold_the_agreed_business_decisions() -> None:
+    rules = config.load_silver_rules()
+
+    assert rules.unknown_label == "Unknown"
+    assert rules.xna_to_unknown_columns == ("CODE_GENDER",)
+    assert "ORGANIZATION_TYPE" not in rules.xna_to_unknown_columns
+    assert rules.null_to_unknown_columns == ("OCCUPATION_TYPE",)
+    assert rules.outlier_flags["AMT_INCOME_TOTAL"].upper_quantile == 0.999
+    assert rules.outlier_flags["AMT_INCOME_TOTAL"].flag == "FLAG_INCOME_OUTLIER"
+    assert rules.missingness_flags["OCCUPATION_TYPE"] == "FLAG_MISSING_OCCUPATION"
+
+
+def test_silver_rules_outlier_quantile_outside_unit_interval_raises(tmp_path: Path) -> None:
+    def break_quantile(data: dict[str, Any]) -> None:
+        data["outlier_flags"]["AMT_INCOME_TOTAL"]["upper_quantile"] = 1.5
+
+    modified = _write_modified_config(tmp_path, "silver_rules.yml", break_quantile)
+
+    with pytest.raises(config.ConfigError, match="upper_quantile"):
+        config.load_silver_rules(modified)
+
+
+def test_silver_rules_sentinel_flag_template_without_placeholder_raises(tmp_path: Path) -> None:
+    def break_template(data: dict[str, Any]) -> None:
+        data["days_sentinel_in_history"]["flag_template"] = "FLAG_SENTINEL"
+
+    modified = _write_modified_config(tmp_path, "silver_rules.yml", break_template)
+
+    with pytest.raises(config.ConfigError, match="flag_template"):
+        config.load_silver_rules(modified)
+
+
 def test_feature_spec_missing_mandatory_ratio_raises(tmp_path: Path) -> None:
     def drop_ratio(data: dict[str, Any]) -> None:
         data["application_ratios"]["ratios"].pop("EMPLOYED_BIRTH_RATIO")

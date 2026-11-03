@@ -56,6 +56,19 @@ class DataContract:
 
 
 @dataclass(frozen=True)
+class OutlierFlag:
+    """A flag marking values above an upper quantile while keeping every value.
+
+    Attributes:
+        upper_quantile: Quantile above which a value counts as an outlier.
+        flag: Name of the emitted 0/1 column.
+    """
+
+    upper_quantile: float
+    flag: str
+
+
+@dataclass(frozen=True)
 class SilverRules:
     """Parsed configs/silver_rules.yml.
 
@@ -63,19 +76,36 @@ class SilverRules:
         employment_sentinel: The 365243 code, its column and the flag it emits.
         missing_value_codes: Strings acting as nulls in the history tables.
         days_columns: Columns the step 3 gate asserts are at most zero.
+        forward_looking_days_columns: Columns exempt from that assertion because
+            they hold dates that legitimately fall after the application.
+        history_sentinel_columns: Table to the DAYS_* columns carrying the same
+            365243 code as DAYS_EMPLOYED.
+        history_sentinel_flag_template: Name pattern of the flag each of those
+            columns emits, with a column placeholder.
         derived_columns: Name to expression for AGE_YEARS and EMPLOYMENT_YEARS.
         missingness_flags: Column to the presence flag it gets.
         history_presence_flags: Source table to its no-history flag.
-        winsorize: Column to upper quantile; rows are never dropped.
+        outlier_flags: Column to the quantile flag it gets; values are never
+            capped and rows are never dropped.
+        unknown_label: Label that replaces XNA gender and null categorical values.
+        xna_to_unknown_columns: Columns whose XNA becomes the unknown label.
+        null_to_unknown_columns: Columns whose null becomes the unknown label,
+            applied after the missingness flags are computed.
     """
 
     employment_sentinel: dict[str, Any]
     missing_value_codes: tuple[str, ...]
     days_columns: tuple[str, ...]
+    forward_looking_days_columns: tuple[str, ...]
+    history_sentinel_columns: dict[str, tuple[str, ...]]
+    history_sentinel_flag_template: str
     derived_columns: dict[str, str]
     missingness_flags: dict[str, str]
     history_presence_flags: dict[str, str]
-    winsorize: dict[str, float]
+    outlier_flags: dict[str, OutlierFlag]
+    unknown_label: str
+    xna_to_unknown_columns: tuple[str, ...]
+    null_to_unknown_columns: tuple[str, ...]
 
 
 @dataclass(frozen=True)

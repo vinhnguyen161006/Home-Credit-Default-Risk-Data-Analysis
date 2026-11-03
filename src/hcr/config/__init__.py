@@ -33,6 +33,7 @@ from hcr.config.models import (
     DataContract,
     FeatureSpec,
     ModelConfig,
+    OutlierFlag,
     SilverRules,
     TableContract,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "DataContract",
     "FeatureSpec",
     "ModelConfig",
+    "OutlierFlag",
     "SilverRules",
     "TableContract",
     "load_cost_config",
