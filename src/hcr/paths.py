@@ -35,6 +35,7 @@ REPORTS_DIR_NAME: Final = "reports"
 FIGURES_DIR_NAME: Final = "figures"
 
 HOLDOUT_IDS_FILENAME: Final = "holdout_ids.parquet"
+HOLDOUT_USAGE_FILENAME: Final = "holdout_usage.json"
 PARQUET_SUFFIX: Final = ".parquet"
 MANIFEST_SUFFIX: Final = ".manifest.json"
 
@@ -120,6 +121,11 @@ def holdout_ids_path() -> Path:
     read, never rewritten, by every later step.
     """
     return splits_dir() / HOLDOUT_IDS_FILENAME
+
+
+def holdout_usage_path() -> Path:
+    """Return the append-only log recording every read of the holdout labels."""
+    return splits_dir() / HOLDOUT_USAGE_FILENAME
 
 
 def features_path(version: str, configuration: str) -> Path:
