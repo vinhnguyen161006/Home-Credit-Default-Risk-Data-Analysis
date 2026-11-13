@@ -47,7 +47,12 @@ def _write_modified_config(
 
 @pytest.fixture
 def clean_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    for name in (*MSSQL_ENVIRONMENT, config.ENV_MLFLOW_URI, config.ENV_MLFLOW_EXPERIMENT):
+    for name in (
+        *MSSQL_ENVIRONMENT,
+        config.ENV_MSSQL_TRUSTED_CONNECTION,
+        config.ENV_MLFLOW_URI,
+        config.ENV_MLFLOW_EXPERIMENT,
+    ):
         monkeypatch.delenv(name, raising=False)
     return tmp_path / ".env"
 
@@ -314,6 +319,62 @@ def test_mssql_connection_string_never_logs_the_password(
 
     assert "SERVER=localhost,14330" in connection_string
     assert MSSQL_ENVIRONMENT[config.ENV_MSSQL_PASSWORD] not in caplog.text
+
+
+def test_mssql_connection_string_supports_a_database_override(
+    monkeypatch: pytest.MonkeyPatch, clean_environment: Path
+) -> None:
+    for name, value in MSSQL_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+
+    connection_string = config.mssql_connection_string(
+        clean_environment, database_override="master"
+    )
+
+    assert "DATABASE={master}" in connection_string
+    assert config.mssql_database_name(clean_environment) == "HomeCredit"
+
+
+def test_mssql_connection_string_escapes_password_delimiters(
+    monkeypatch: pytest.MonkeyPatch, clean_environment: Path
+) -> None:
+    for name, value in MSSQL_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(config.ENV_MSSQL_PASSWORD, "strong;password}")
+
+    connection_string = config.mssql_connection_string(clean_environment)
+
+    assert "PWD={strong;password}}}" in connection_string
+
+
+def test_mssql_connection_string_uses_windows_authentication(
+    monkeypatch: pytest.MonkeyPatch, clean_environment: Path
+) -> None:
+    for name, value in MSSQL_ENVIRONMENT.items():
+        if name != config.ENV_MSSQL_PASSWORD:
+            monkeypatch.setenv(name, value)
+    monkeypatch.setenv(config.ENV_MSSQL_TRUSTED_CONNECTION, "true")
+    monkeypatch.delenv(config.ENV_MSSQL_PASSWORD, raising=False)
+
+    connection_string = config.mssql_connection_string(
+        clean_environment, database_override="master"
+    )
+
+    assert "DATABASE={master}" in connection_string
+    assert "Trusted_Connection=yes" in connection_string
+    assert "UID=" not in connection_string
+    assert "PWD=" not in connection_string
+
+
+def test_mssql_connection_string_rejects_invalid_authentication_flag(
+    monkeypatch: pytest.MonkeyPatch, clean_environment: Path
+) -> None:
+    for name, value in MSSQL_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(config.ENV_MSSQL_TRUSTED_CONNECTION, "sometimes")
+
+    with pytest.raises(config.ConfigError, match=config.ENV_MSSQL_TRUSTED_CONNECTION):
+        config.mssql_connection_string(clean_environment)
 
 
 def test_process_environment_overrides_env_file(

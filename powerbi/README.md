@@ -3,6 +3,42 @@
 Bốn trang báo cáo, nối trực tiếp vào SQL Server. Lưu dạng PBIP để mô hình ngữ nghĩa (TMDL) đọc
 được dưới dạng văn bản và diff được trong git — `.pbix` là file nhị phân, không review được.
 
+## Nạp mart trước ML
+
+File `.env` ở thư mục gốc repository đã được cấu hình Windows Authentication và được Git ignore.
+Với SQL Authentication, dạng cấu hình thay thế là:
+
+```text
+MSSQL_HOST=localhost
+MSSQL_PORT=1433
+MSSQL_DATABASE=HomeCredit
+MSSQL_TRUSTED_CONNECTION=false
+MSSQL_SA_PASSWORD=your-existing-sa-password
+```
+
+Đặt `MSSQL_TRUSTED_CONNECTION=true` để dùng Windows Authentication; khi đó không cần khai báo
+`MSSQL_SA_PASSWORD` và tiến trình phải chạy dưới tài khoản Windows được SQL Server cấp quyền. Thay
+host và port bằng địa chỉ TCP thực tế của SQL Server. Tài khoản cần quyền tạo database nếu
+`MSSQL_DATABASE` chưa tồn tại, cùng quyền tạo/thay bảng trong database đích. Không dùng
+`make mssql-up` nếu đã có SQL Server đang chạy.
+
+Chạy `make serve` để tạo mart từ bảy Silver Parquet rồi nạp 13 bảng vào database. Nếu không có lệnh
+`make`, chạy lần lượt `uv run python -m hcr.serving.build_star` và
+`uv run python -m hcr.serving.load_sqlserver`.
+
+Trong Power BI Desktop, chọn **Get data → SQL Server**, nhập cùng host/port và database đã cấu hình,
+rồi chọn **Import**. Mart gồm:
+
+- Facts: `Fact_Application`, `Fact_BureauLoan`, `Fact_PreviousApplication`.
+- Dimensions: `Dim_Customer`, `Dim_Occupation`, `Dim_Organization`, `Dim_Education`,
+  `Dim_ContractType`, `Dim_HousingType`, `Dim_FamilyStatus`, `Dim_AgeBand`, `Dim_IncomeBand`,
+  `Dim_RiskBand`.
+
+Tạo quan hệ `Dim_Customer.CustomerKey` với `CustomerKey` trên cả ba fact. Nối chín dimension còn lại
+vào các khóa tương ứng trên `Fact_Application`; không nối các fact trực tiếp với nhau. `Fact_BureauLoan`
+bao gồm cả khoản vay chỉ có ở bureau balance, còn `Fact_PreviousApplication` giữ lại khóa chỉ xuất
+hiện trong các bảng lịch sử con.
+
 ## Bốn trang
 
 | Trang | Câu hỏi trả lời | Nội dung |

@@ -33,6 +33,7 @@ FEATURES_DIR_NAME: Final = "features"
 MODELS_DIR_NAME: Final = "models"
 REPORTS_DIR_NAME: Final = "reports"
 FIGURES_DIR_NAME: Final = "figures"
+MART_DIR_NAME: Final = "mart"
 
 HOLDOUT_IDS_FILENAME: Final = "holdout_ids.parquet"
 PARQUET_SUFFIX: Final = ".parquet"
@@ -156,6 +157,11 @@ def models_dir() -> Path:
     return data_dir() / MODELS_DIR_NAME
 
 
+def mart_dir() -> Path:
+    """Return the directory holding compact serving tables for Power BI."""
+    return data_dir() / MART_DIR_NAME
+
+
 def sql_dir() -> Path:
     """Return the directory holding the DuckDB aggregation queries.
 
@@ -171,6 +177,11 @@ def ddl_dir() -> Path:
     Resolved from the package location for the same reason as sql_dir.
     """
     return PACKAGE_DIR / "serving" / "ddl"
+
+
+def serving_sql_dir() -> Path:
+    """Return the directory holding DuckDB serving aggregation queries."""
+    return PACKAGE_DIR / "serving" / "sql"
 
 
 def figures_dir() -> Path:
