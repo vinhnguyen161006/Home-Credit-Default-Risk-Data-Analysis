@@ -18,15 +18,15 @@ leaving 80 percent for cross-validation.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Final
-
-logger = logging.getLogger(__name__)
 
 CONFIDENCE_LEVEL: Final = 0.95
 Z_SCORE_95: Final = 1.959964
 BOOTSTRAP_RESAMPLES: Final = 2000
+AUC_LOWER_BOUND: Final = 0.0
+AUC_UPPER_BOUND: Final = 1.0
+AUC_DECIMAL_PLACES: Final = 3
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,10 @@ class AucInterval:
 def hanley_mcneil_standard_error(auc: float, positives: int, negatives: int) -> float:
     """Compute the AUC standard error analytically.
 
+    The formula assumes an exponential score distribution. That assumption is approximate
+    but close enough at these sample sizes, and it is what the reference figures in this
+    module were computed with.
+
     Args:
         auc: Point estimate.
         positives: Positive case count.
@@ -64,33 +68,49 @@ def hanley_mcneil_standard_error(auc: float, positives: int, negatives: int) -> 
         The standard error.
 
     Raises:
-        ValueError: If either class count is zero.
-
-    TODO:
-        - Implement the standard formula with the two intermediate quantities
-          Q1 = auc / (2 - auc) and Q2 = 2 * auc ** 2 / (1 + auc).
-        - Note in the implementation that this assumes an exponential score
-          distribution, which is approximate but close enough at these sample sizes
-          and is what the quoted reference figures were computed with.
-        - Raise on a zero class count rather than returning infinity, so a degenerate
-          fairness subgroup fails loudly instead of producing an unbounded interval
-          in a published table.
+        ValueError: If either class count is zero. An interval over an empty class is
+            undefined, and returning infinity would publish an unbounded figure.
     """
-    raise NotImplementedError
+    if positives == 0 or negatives == 0:
+        raise ValueError(
+            f"Both classes need at least one case, got {positives} positives "
+            f"and {negatives} negatives"
+        )
+    q1 = auc / (2 - auc)
+    q2 = 2 * auc**2 / (1 + auc)
+    variance_numerator = (
+        auc * (1 - auc) + (positives - 1) * (q1 - auc**2) + (negatives - 1) * (q2 - auc**2)
+    )
+    return float((variance_numerator / (positives * negatives)) ** 0.5)
 
 
 def auc_interval(auc: float, positives: int, negatives: int) -> AucInterval:
     """Build the 95 percent interval around an AUC estimate.
 
-    TODO:
-        - Use Z_SCORE_95 times the standard error, clipped to [0, 1]. An interval
-          whose upper bound exceeds 1 is arithmetically correct and visibly wrong in
-          a report.
-        - Record the positive and negative counts in the result. A reader checking
-          whether an interval is plausible needs the counts, and a fairness subgroup
-          with 300 positives deserves visibly wider bounds.
+    The bounds are clipped to [0, 1]. An upper bound above 1 is arithmetically correct
+    and visibly wrong in a report.
+
+    Args:
+        auc: Point estimate.
+        positives: Positive case count, recorded so a reader can judge the interval.
+        negatives: Negative case count.
+
+    Raises:
+        ValueError: If the class counts are zero, or the AUC lies outside [0, 1].
     """
-    raise NotImplementedError
+    if not AUC_LOWER_BOUND <= auc <= AUC_UPPER_BOUND:
+        raise ValueError(f"AUC must lie in [0, 1], got {auc}")
+    standard_error = hanley_mcneil_standard_error(auc, positives, negatives)
+    half_width = Z_SCORE_95 * standard_error
+    return AucInterval(
+        auc=auc,
+        standard_error=standard_error,
+        lower=max(AUC_LOWER_BOUND, auc - half_width),
+        upper=min(AUC_UPPER_BOUND, auc + half_width),
+        method="hanley_mcneil",
+        positives=positives,
+        negatives=negatives,
+    )
 
 
 def bootstrap_auc_interval(
@@ -122,12 +142,15 @@ def bootstrap_auc_interval(
 def format_auc_with_interval(interval: AucInterval) -> str:
     """Format an AUC and its interval for a document.
 
+    Three decimal places, because more implies precision the interval denies. This is
+    the only formatter the report generator should use, so no bare AUC reaches the
+    document by another path.
+
     Returns:
         A string such as "0.785 (95% CI 0.777 to 0.793)".
-
-    TODO:
-        - Render three decimal places. More implies precision the interval denies.
-        - Make this the only formatter used in the report generator, so no bare AUC
-          can reach the document by a different path.
     """
-    raise NotImplementedError
+    return (
+        f"{interval.auc:.{AUC_DECIMAL_PLACES}f} "
+        f"(95% CI {interval.lower:.{AUC_DECIMAL_PLACES}f} "
+        f"to {interval.upper:.{AUC_DECIMAL_PLACES}f})"
+    )

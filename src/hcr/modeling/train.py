@@ -19,6 +19,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from sklearn.model_selection import StratifiedKFold
+
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
@@ -89,6 +91,31 @@ class TrainingResult:
     oof_predictions: npt.NDArray[np.float64]
     feature_importance: dict[str, float]
     mlflow_run_id: str
+
+
+def stratified_folds(
+    labels: pl.Series,
+    n_splits: int,
+    random_seed: int,
+) -> tuple[tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]], ...]:
+    """Return the train and validation row positions of each fold.
+
+    Stratifies on TARGET so the positive rate holds in every fold. Positions index the
+    rows as given, so callers sort by SK_ID_CURR first and the folds do not depend on
+    the row order of the file. Baselines and the main model both call this function,
+    so every AUC in the sequence table comes from the same partition.
+
+    Args:
+        labels: Training TARGET, one value per row.
+        n_splits: Number of folds.
+        random_seed: Seed fixing the shuffle across runs.
+
+    Returns:
+        One (train positions, validation positions) pair per fold, in fold order.
+    """
+    label_values = labels.to_numpy()
+    splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
+    return tuple(splitter.split(label_values, label_values))
 
 
 def load_training_split(configuration: str) -> tuple[pl.DataFrame, pl.Series]:
