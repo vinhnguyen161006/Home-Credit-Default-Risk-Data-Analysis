@@ -114,6 +114,12 @@ class FeatureSpec:
 
     Attributes:
         windows_months: The 3, 6, 12 and 24 month windows.
+        windowed_aggregations: Functions allowed inside a window, intersected with
+            the functions declared per column.
+        rollup_aggregations: Functions applied to each whole-history stage one
+            column when folding to customer grain.
+        windowed_rollup_aggregations: Functions applied to each windowed stage one
+            column when folding to customer grain.
         application_ratios: Ratio name to expression, all six mandatory.
         sources: Per-source aggregation declaration driving SQL generation.
         configurations: The full and no_ext_source variants.
@@ -122,6 +128,9 @@ class FeatureSpec:
     """
 
     windows_months: tuple[int, ...]
+    windowed_aggregations: tuple[str, ...]
+    rollup_aggregations: tuple[str, ...]
+    windowed_rollup_aggregations: tuple[str, ...]
     application_ratios: dict[str, str]
     sources: dict[str, dict[str, Any]]
     configurations: dict[str, dict[str, Any]]

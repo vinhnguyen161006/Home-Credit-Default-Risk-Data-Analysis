@@ -8,6 +8,14 @@ meta:
     PREFIX_COLUMN_AGG_NM for windowed ones.
 
 windows_months: [3, 6, 12, 24]
+windowed_aggregations: [sum, mean, max]
+rollup_aggregations: [mean, max]
+windowed_rollup_aggregations: [mean]
+rollup_rationale: >-
+  Windowed columns use only sum, mean and max, because count, min and std over a
+  short window carry little and multiply the column count. The second fold takes
+  mean and max of each whole-history stage one column and only mean of each
+  windowed one, which keeps the matrix inside the 500 to 800 column budget.
 windows_rationale: >-
   Repayment behaviour over the last three months carries more information than
   behaviour four years ago, and a whole-history aggregate dilutes the two
@@ -42,9 +50,6 @@ sources:
     note: >-
       Largest table in the dataset. DuckDB reads it column-wise and spills to
       disk when needed, so memory does not bound this step.
-    derived:
-      STATUS_IS_DPD: STATUS IN ('1', '2', '3', '4', '5')
-      STATUS_IS_CLOSED: STATUS = 'C'
     aggregations:
       MONTHS_BALANCE: [count, min, max]
       STATUS_IS_DPD: [sum, mean, max]
@@ -75,7 +80,6 @@ sources:
       CNT_CREDIT_PROLONG: [sum, max]
       CREDIT_ACTIVE_IS_ACTIVE: [sum, mean]
       DEBT_CREDIT_RATIO: [mean, max]
-      BB_STATUS_IS_DPD_MEAN: [mean, max]
 
   previous_application:
     prefix: PREV
@@ -108,8 +112,6 @@ sources:
     join_from: previous_application
     time_column: MONTHS_BALANCE
     windowed: true
-    derived:
-      IS_DPD: SK_DPD > 0
     aggregations:
       MONTHS_BALANCE: [count, min, max]
       SK_DPD: [mean, max, sum]
@@ -133,11 +135,6 @@ sources:
       delay measurable per transaction. PAYMENT_DELAY_DAYS and PAYMENT_RATIO are
       the two features that measure repayment behaviour directly, with no
       intermediate variable.
-    derived:
-      PAYMENT_DELAY_DAYS: DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT
-      IS_LATE: (DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT) > 0
-      PAYMENT_RATIO: AMT_PAYMENT / AMT_INSTALMENT
-      IS_UNDERPAID: AMT_PAYMENT < AMT_INSTALMENT
     aggregations:
       NUM_INSTALMENT_NUMBER: [count, max]
       AMT_INSTALMENT: [sum, mean, max]
@@ -157,9 +154,6 @@ sources:
     join_from: previous_application
     time_column: MONTHS_BALANCE
     windowed: true
-    derived:
-      UTILIZATION: AMT_BALANCE / AMT_CREDIT_LIMIT_ACTUAL
-      IS_DPD: SK_DPD > 0
     aggregations:
       MONTHS_BALANCE: [count, min, max]
       AMT_BALANCE: [mean, max, min, std]

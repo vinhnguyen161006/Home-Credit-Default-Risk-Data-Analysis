@@ -21,6 +21,7 @@ from hcr.config.rules import (
     parse_history_sentinels,
     parse_outlier_flags,
     parse_table_contract,
+    validate_aggregation_functions,
     validate_cost_fractions,
     validate_model_rules,
     validate_prefixes,
@@ -77,6 +78,9 @@ SILVER_RULES_KEYS: Final = (
 
 FEATURE_SPEC_KEYS: Final = (
     "windows_months",
+    "windowed_aggregations",
+    "rollup_aggregations",
+    "windowed_rollup_aggregations",
     "application_ratios",
     "sources",
     "configurations",
@@ -232,6 +236,15 @@ def load_feature_spec(path: Path | None = None) -> FeatureSpec:
     for name, entry in sources.items():
         validate_source_entry(name, entry, source)
 
+    for field in (
+        "windowed_aggregations",
+        "rollup_aggregations",
+        "windowed_rollup_aggregations",
+    ):
+        validate_aggregation_functions(
+            require_string_tuple(data[field], field, source), field, source
+        )
+
     configurations = strip_annotations(
         require_mapping(data["configurations"], "configurations", source)
     )
@@ -239,6 +252,15 @@ def load_feature_spec(path: Path | None = None) -> FeatureSpec:
         windows_months=tuple(
             require_int(window, "windows_months", source)
             for window in require_list(data["windows_months"], "windows_months", source)
+        ),
+        windowed_aggregations=require_string_tuple(
+            data["windowed_aggregations"], "windowed_aggregations", source
+        ),
+        rollup_aggregations=require_string_tuple(
+            data["rollup_aggregations"], "rollup_aggregations", source
+        ),
+        windowed_rollup_aggregations=require_string_tuple(
+            data["windowed_rollup_aggregations"], "windowed_rollup_aggregations", source
         ),
         application_ratios=ratios,
         sources=sources,

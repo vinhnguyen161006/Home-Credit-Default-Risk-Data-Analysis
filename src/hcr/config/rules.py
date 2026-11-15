@@ -29,6 +29,7 @@ EMPLOYMENT_SENTINEL_VALUE: Final = 365243
 HISTORY_SENTINEL_PLACEHOLDER: Final = "{column}"
 FEATURE_PREFIXES: Final = frozenset({"APP", "BURO", "BB", "PREV", "POS", "INST", "CC"})
 FIRST_STAGE: Final = 1
+AGGREGATION_FUNCTIONS: Final = frozenset({"count", "sum", "mean", "max", "min", "std"})
 SYNTHETIC_OVERSAMPLING_FORBIDDEN: Final = "forbidden"
 MIN_CV_SPLITS: Final = 2
 ACCEPTANCE_KEYS: Final = (
@@ -172,6 +173,21 @@ def validate_prefixes(
     duplicated = sorted({prefix for prefix in declared if declared.count(prefix) > 1})
     if duplicated:
         raise ConfigError(f"{source}: prefixes declared more than once: {', '.join(duplicated)}")
+
+
+def validate_aggregation_functions(functions: tuple[str, ...], field: str, source: Path) -> None:
+    """Assert a declared function list is non-empty, repeat-free and from the known set.
+
+    A misspelt function would otherwise reach the generated SQL, where the failure
+    names a SQL error rather than the config line that caused it.
+    """
+    if not functions:
+        raise ConfigError(f"{source}: {field} must not be empty")
+    unknown = sorted(set(functions) - AGGREGATION_FUNCTIONS)
+    if unknown:
+        raise ConfigError(f"{source}: {field} has unknown functions: {', '.join(unknown)}")
+    if len(set(functions)) != len(functions):
+        raise ConfigError(f"{source}: {field} repeats a function")
 
 
 def validate_source_entry(name: str, entry: Mapping[str, Any], source: Path) -> None:

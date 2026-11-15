@@ -351,3 +351,23 @@ def test_mlflow_defaults_apply_when_environment_is_empty(clean_environment: Path
         config.mlflow_experiment_name(clean_environment)
         == config.load_model_config().mlflow_experiment_name
     )
+
+
+def test_feature_spec_missing_rollup_key_raises(tmp_path: Path) -> None:
+    def drop_rollup(data: dict[str, Any]) -> None:
+        data.pop("rollup_aggregations")
+
+    modified = _write_modified_config(tmp_path, "features.yml", drop_rollup)
+
+    with pytest.raises(config.ConfigError, match="rollup_aggregations"):
+        config.load_feature_spec(modified)
+
+
+def test_feature_spec_unknown_rollup_function_raises(tmp_path: Path) -> None:
+    def misspell_function(data: dict[str, Any]) -> None:
+        data["rollup_aggregations"] = ["mean", "median"]
+
+    modified = _write_modified_config(tmp_path, "features.yml", misspell_function)
+
+    with pytest.raises(config.ConfigError, match="median"):
+        config.load_feature_spec(modified)
