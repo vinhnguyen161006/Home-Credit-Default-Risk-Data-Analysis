@@ -11,95 +11,281 @@ Tests run against the small fixtures through an in-memory DuckDB connection, so 
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
+import re
+from typing import TYPE_CHECKING
 
-import duckdb
 import polars as pl
 import pytest
 
-from hcr.features.build import compute_application_ratios
+from conftest import (
+    BUREAU_ID_WITHOUT_BALANCE,
+    FIRST_APPLICATION_ID,
+    NO_BUREAU_HISTORY_ROWS,
+    SINGLE_MONTH_BUREAU_ID,
+)
+from hcr.config import FeatureSpec, load_feature_spec, load_silver_rules
+from hcr.features import build
+from hcr.features.build import (
+    AggregationError,
+    BuildLayout,
+    build_features,
+    compute_application_ratios,
+    fold_stage_one,
+    register_silver_tables,
+    render_aggregation_sql,
+)
+from hcr.features.columns import (
+    DAYS_PER_MONTH,
+    feature_column_name,
+    own_columns,
+    stage_one_columns,
+    stage_two_columns,
+    validate_identifier,
+    window_filter,
+    window_threshold,
+)
+from hcr.paths import configs_dir
+from hcr.silver.clean_application import add_missingness_flags
+from hcr.silver.clean_history import (
+    derive_bureau_balance_status,
+    derive_delinquency_flags,
+    derive_payment_behaviour,
+    derive_utilization,
+)
+from hcr.silver.flags import build_presence_flags
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import duckdb
+
+APPLICATION_ROWS = 50
+MATRIX_COLUMN_BUDGET = 800
+APPLICATION_COLUMN_ALLOWANCE = 110
+NAME_PATTERN = re.compile(r"^(APP|BURO|BB|PREV|POS|INST|CC)_[A-Z0-9_]+$")
+WINDOWED_NAME_PATTERN = re.compile(r"_(3|6|12|24)M$")
+CUSTOMER_WITHOUT_BUREAU = FIRST_APPLICATION_ID + min(NO_BUREAU_HISTORY_ROWS)
+CUSTOMER_WITH_BARE_LOANS = FIRST_APPLICATION_ID + 3
+MANIFEST_SUFFIX = ".manifest.json"
+STAGE_ONE = 1
+THIRD_LEVEL_TABLES = ("pos_cash_balance", "installments_payments", "credit_card_balance")
+SECOND_LEVEL_TABLES = ("bureau", "previous_application")
 
 
-def test_aggregation_yields_one_row_per_customer() -> None:
-    """TODO The assembled matrix has exactly one row per application id.
-
-    Assert the row count equals the fixture application count and that SK_ID_CURR is
-    unique. This is the step 5 gate, and a fan-out is the defect it exists to catch.
-    """
-    raise NotImplementedError
+@pytest.fixture
+def feature_spec() -> FeatureSpec:
+    return load_feature_spec()
 
 
-def test_left_join_keeps_customers_without_bureau_history() -> None:
-    """TODO A customer with no bureau row survives the join.
-
-    The fixture includes such a customer deliberately. An INNER JOIN would drop them, and on
-    the real data it would drop more than half the external loan history.
-    """
-    raise NotImplementedError
-
-
-def test_missing_history_yields_null_not_zero() -> None:
-    """TODO Aggregates are null, not zero, for a customer with no history.
-
-    The central rule of the whole system. Assert on a BURO_ column for the customer the
-    fixture leaves out of bureau. A zero here would claim they borrowed nothing.
-    """
-    raise NotImplementedError
+def _write_silver(directory: Path, tables: dict[str, pl.DataFrame]) -> dict[str, Path]:
+    paths = {}
+    for name, frame in tables.items():
+        paths[name] = directory / f"{name}.parquet"
+        frame.write_parquet(paths[name])
+    return paths
 
 
-def test_history_presence_flag_is_set_for_missing_history() -> None:
-    """TODO FLAG_NO_BUREAU_HISTORY is 1 for that same customer.
-
-    The null and the flag are a pair: the null carries the absence into the model, the flag
-    records why. Assert both together, since either alone is incomplete.
-    """
-    raise NotImplementedError
-
-
-def test_count_of_key_is_zero_not_one_when_no_child_rows() -> None:
-    """TODO A count over the key yields zero for a customer with no child rows.
-
-    COUNT(*) after a LEFT JOIN returns one for a non-matching row, which silently claims one
-    loan where there are none. Assert the count column uses the key.
-    """
-    raise NotImplementedError
-
-
-def test_two_stage_fold_preserves_loan_without_balance_rows() -> None:
-    """TODO A bureau loan with no monthly rows survives the stage one join.
-
-    Mirrors the real 48 percent coverage. Assert the loan appears in the stage two output
-    with null balance aggregates rather than being dropped.
-    """
-    raise NotImplementedError
-
-
-def test_regr_slope_is_null_for_single_observation() -> None:
-    """TODO A trend over one point is null, not zero.
-
-    A slope needs two points. Zero would assert a flat trajectory where none is measurable,
-    and a model would read that as a real signal.
-    """
-    raise NotImplementedError
+@pytest.fixture
+def silver_paths(
+    tmp_path: Path,
+    application_frame: pl.DataFrame,
+    bureau_frame: pl.DataFrame,
+    bureau_balance_frame: pl.DataFrame,
+    previous_application_frame: pl.DataFrame,
+    pos_cash_frame: pl.DataFrame,
+    installments_frame: pl.DataFrame,
+    credit_card_frame: pl.DataFrame,
+) -> dict[str, Path]:
+    rules = load_silver_rules()
+    tables = {
+        "application_train": add_missingness_flags(application_frame, rules),
+        "bureau": bureau_frame,
+        "bureau_balance": derive_bureau_balance_status(bureau_balance_frame),
+        "previous_application": previous_application_frame,
+        "pos_cash_balance": derive_delinquency_flags(pos_cash_frame),
+        "installments_payments": derive_payment_behaviour(installments_frame),
+        "credit_card_balance": derive_delinquency_flags(derive_utilization(credit_card_frame)),
+    }
+    customers = {
+        table: tables[table].get_column("SK_ID_CURR") for table in rules.history_presence_flags
+    }
+    tables["history_presence_flags"] = build_presence_flags(
+        application_frame.get_column("SK_ID_CURR"), customers, rules.history_presence_flags
+    )
+    directory = tmp_path / "silver"
+    directory.mkdir()
+    return _write_silver(directory, tables)
 
 
-def test_window_filter_uses_days_not_months_for_days_columns() -> None:
-    """TODO A three-month window on a DAYS_ column spans 90 days.
+def _layout(
+    directory: Path, silver: dict[str, Path], configurations: tuple[str, ...] = ("full",)
+) -> BuildLayout:
+    return BuildLayout(
+        silver=silver,
+        matrices={name: directory / f"{name}.parquet" for name in configurations},
+        manifests={name: directory / f"{name}{MANIFEST_SUFFIX}" for name in configurations},
+        temp_dir=directory / "spill",
+        config_path=configs_dir() / "features.yml",
+    )
 
-    The unit confusion that produces a window thirty times too wide while the resulting
-    column still looks entirely plausible. Assert against a fixture row that falls inside
-    90 days but outside 3.
-    """
-    raise NotImplementedError
+
+@pytest.fixture
+def built_matrix(
+    tmp_path: Path, silver_paths: dict[str, Path], feature_spec: FeatureSpec
+) -> pl.DataFrame:
+    layout = _layout(tmp_path / "out", silver_paths)
+    build_features(layout, feature_spec, ("full",), expected_rows=APPLICATION_ROWS)
+    return pl.read_parquet(layout.matrices["full"])
 
 
-def test_window_filter_uses_months_for_months_balance() -> None:
-    """TODO A three-month window on MONTHS_BALANCE spans 3 units.
+def _row(matrix: pl.DataFrame, customer: int) -> dict[str, object]:
+    return matrix.filter(pl.col("SK_ID_CURR") == customer).row(0, named=True)
 
-    The other half of the same confusion. Assert both directions so neither convention can
-    drift into the other.
-    """
-    raise NotImplementedError
+
+def _stage_one_by_table(feature_spec: FeatureSpec) -> dict[str, tuple[object, ...]]:
+    return {
+        name: stage_one_columns(name, feature_spec)
+        for name, entry in feature_spec.sources.items()
+        if entry["stage"] == STAGE_ONE
+    }
+
+
+def test_aggregation_yields_one_row_per_customer(
+    built_matrix: pl.DataFrame, application_frame: pl.DataFrame
+) -> None:
+    assert built_matrix.height == application_frame.height
+    assert built_matrix.get_column("SK_ID_CURR").is_unique().all()
+
+
+def test_matrix_does_not_carry_the_label(built_matrix: pl.DataFrame) -> None:
+    assert "TARGET" not in built_matrix.columns
+
+
+def test_aggregation_gate_raises_when_row_count_is_wrong(
+    tmp_path: Path, silver_paths: dict[str, Path], feature_spec: FeatureSpec
+) -> None:
+    layout = _layout(tmp_path / "out", silver_paths)
+
+    with pytest.raises(AggregationError, match="expected"):
+        build_features(layout, feature_spec, ("full",), expected_rows=APPLICATION_ROWS + 1)
+
+    assert not layout.matrices["full"].exists()
+
+
+def test_left_join_keeps_customers_without_bureau_history(built_matrix: pl.DataFrame) -> None:
+    assert CUSTOMER_WITHOUT_BUREAU in built_matrix.get_column("SK_ID_CURR").to_list()
+
+
+def test_missing_history_yields_null_not_zero(built_matrix: pl.DataFrame) -> None:
+    row = _row(built_matrix, CUSTOMER_WITHOUT_BUREAU)
+    bureau_values = [value for name, value in row.items() if name.startswith("BURO_")]
+
+    assert bureau_values
+    assert all(value is None for value in bureau_values)
+
+
+def test_history_presence_flag_is_set_for_missing_history(built_matrix: pl.DataFrame) -> None:
+    row = _row(built_matrix, CUSTOMER_WITHOUT_BUREAU)
+
+    assert row["FLAG_NO_BUREAU_HISTORY"] == 1
+    assert row["BURO_SK_ID_BUREAU_COUNT"] is None
+    assert _row(built_matrix, FIRST_APPLICATION_ID)["FLAG_NO_BUREAU_HISTORY"] == 0
+
+
+def test_count_of_key_is_zero_not_one_when_no_child_rows(
+    built_matrix: pl.DataFrame, feature_spec: FeatureSpec
+) -> None:
+    row = _row(built_matrix, CUSTOMER_WITH_BARE_LOANS)
+    columns = stage_two_columns(
+        "previous_application",
+        feature_spec,
+        {name: stage_one_columns(name, feature_spec) for name in THIRD_LEVEL_TABLES},
+    )
+
+    assert row["PREV_SK_ID_PREV_COUNT"] == 1
+    assert row["POS_MONTHS_BALANCE_COUNT_MEAN"] is None
+    assert "COUNT(*)" not in render_aggregation_sql("previous_application", columns).upper()
+
+
+def test_two_stage_fold_preserves_loan_without_balance_rows(built_matrix: pl.DataFrame) -> None:
+    row = _row(built_matrix, CUSTOMER_WITH_BARE_LOANS)
+
+    assert row["BURO_SK_ID_BUREAU_COUNT"] == 1
+    assert row["BURO_BB_STATUS_IS_DPD_MEAN_MEAN"] is None
+    assert row["BURO_AMT_CREDIT_SUM_SUM"] is not None
+
+
+def test_regr_slope_is_null_for_single_observation(
+    duckdb_connection: duckdb.DuckDBPyConnection,
+    silver_paths: dict[str, Path],
+    feature_spec: FeatureSpec,
+) -> None:
+    register_silver_tables(duckdb_connection, silver_paths)
+    stage = fold_stage_one(duckdb_connection, "bureau_balance", feature_spec)
+
+    slopes = dict(
+        duckdb_connection.execute(
+            f"SELECT SK_ID_BUREAU, BB_STATUS_IS_DPD_SLOPE FROM {stage.relation}"
+        ).fetchall()
+    )
+
+    assert slopes[SINGLE_MONTH_BUREAU_ID] is None
+    assert slopes[SINGLE_MONTH_BUREAU_ID - 3] is not None
+    assert BUREAU_ID_WITHOUT_BALANCE not in slopes
+
+
+def test_window_filter_uses_days_not_months_for_days_columns(
+    duckdb_connection: duckdb.DuckDBPyConnection,
+    silver_paths: dict[str, Path],
+    feature_spec: FeatureSpec,
+) -> None:
+    assert window_filter("DAYS_INSTALMENT", 3) == f"DAYS_INSTALMENT >= -{3 * DAYS_PER_MONTH}"
+    register_silver_tables(duckdb_connection, silver_paths)
+    stage = fold_stage_one(duckdb_connection, "installments_payments", feature_spec)
+
+    row = duckdb_connection.execute(
+        f"SELECT INST_AMT_INSTALMENT_SUM, INST_AMT_INSTALMENT_SUM_3M FROM {stage.relation}"
+    ).fetchone()
+
+    assert row == (30_000.0, 20_000.0)
+
+
+def test_window_filter_uses_months_for_months_balance(
+    duckdb_connection: duckdb.DuckDBPyConnection,
+    tmp_path: Path,
+    feature_spec: FeatureSpec,
+) -> None:
+    assert window_filter("MONTHS_BALANCE", 3) == "MONTHS_BALANCE >= -3"
+    assert window_threshold("MONTHS_BALANCE", 12) == 12
+    pos_cash = derive_delinquency_flags(
+        pl.DataFrame(
+            {
+                "SK_ID_PREV": [1] * 4,
+                "SK_ID_CURR": [1] * 4,
+                "MONTHS_BALANCE": [0, -2, -5, -20],
+                "CNT_INSTALMENT": [12.0] * 4,
+                "CNT_INSTALMENT_FUTURE": [4.0, 5.0, 6.0, 7.0],
+                "SK_DPD": [1] * 4,
+                "SK_DPD_DEF": [0] * 4,
+            }
+        )
+    )
+    paths = _write_silver(tmp_path, {"pos_cash_balance": pos_cash})
+    register_silver_tables(duckdb_connection, paths)
+    stage = fold_stage_one(duckdb_connection, "pos_cash_balance", feature_spec)
+
+    sums = duckdb_connection.execute(
+        "SELECT POS_SK_DPD_SUM_3M, POS_SK_DPD_SUM_6M, POS_SK_DPD_SUM_12M, POS_SK_DPD_SUM_24M "
+        f"FROM {stage.relation}"
+    ).fetchone()
+
+    assert sums == (2.0, 3.0, 3.0, 4.0)
+
+
+def test_unit_of_an_unknown_time_column_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unit"):
+        window_threshold("SOME_OTHER_COLUMN", 3)
 
 
 APPLICATION_RATIO_COLUMNS = (
@@ -168,49 +354,103 @@ def test_employed_birth_ratio_stays_null_for_sentinel_customer(
     assert row["APP_CREDIT_INCOME_RATIO"] == pytest.approx(2.0)
 
 
-def test_column_names_follow_the_naming_contract() -> None:
-    """TODO Generated names match PREFIX_COLUMN_AGG and the windowed variant.
+def test_column_names_follow_the_naming_contract(feature_spec: FeatureSpec) -> None:
+    stage_ones = _stage_one_by_table(feature_spec)
+    generated = [
+        column
+        for parent in SECOND_LEVEL_TABLES
+        for column in stage_two_columns(parent, feature_spec, stage_ones)
+    ]
 
-    Assert the prefix is from the fixed set and the window suffix is present where expected.
-    With 500 to 800 columns, a naming drift is invisible by inspection and breaks the
-    manifest aggregation that explanations depend on.
-    """
-    raise NotImplementedError
-
-
-def test_manifest_records_provenance_for_every_column() -> None:
-    """TODO Every matrix column has a manifest entry naming its source and aggregation.
-
-    Assert the column sets match exactly, both directions. A column without provenance
-    cannot be interpreted, and a manifest entry without a column means the generator and the
-    record disagree.
-    """
-    raise NotImplementedError
+    assert generated
+    for column in generated:
+        assert NAME_PATTERN.fullmatch(column.name), column.name
+        windowed = column.provenance.window_months is not None
+        assert bool(WINDOWED_NAME_PATTERN.search(column.name)) == windowed, column.name
+    assert feature_column_name("POS", "SK_DPD_MEAN", "mean", 3) == "POS_SK_DPD_MEAN_MEAN_3M"
+    assert "BURO_BB_STATUS_IS_DPD_MEAN_MEAN" in {column.name for column in generated}
 
 
-def test_manifest_is_byte_identical_across_two_runs() -> None:
-    """TODO Two runs on identical inputs produce an identical manifest.
-
-    Underpins the reproducibility acceptance criterion. Assert equality of the written bytes,
-    which catches unsorted keys and embedded timestamps.
-    """
-    raise NotImplementedError
+def test_column_name_rejects_a_prefix_outside_the_fixed_set() -> None:
+    with pytest.raises(ValueError, match="BUREAU"):
+        feature_column_name("BUREAU", "AMT_CREDIT", "mean", None)
 
 
-def test_no_ext_source_configuration_excludes_the_columns() -> None:
-    """TODO The no_ext_source matrix contains no EXT_SOURCE column or flag.
-
-    Assert both the value columns and their missingness flags are absent. A leftover flag
-    still leaks which applicants had a score, which is part of what the configuration is
-    measuring the absence of.
-    """
-    raise NotImplementedError
+def test_identifier_with_sql_syntax_is_rejected() -> None:
+    with pytest.raises(ValueError, match="identifier"):
+        validate_identifier("AMT_CREDIT; DROP TABLE bureau")
 
 
-def test_aggregation_requires_holdout_file_to_exist() -> None:
-    """TODO Building features without a holdout file raises.
+def test_derived_division_without_a_guard_is_rejected(feature_spec: FeatureSpec) -> None:
+    bureau = dict(feature_spec.sources["bureau"])
+    bureau["derived"] = {"DEBT_CREDIT_RATIO": "AMT_CREDIT_SUM_DEBT / AMT_CREDIT_SUM"}
 
-    The ordering guard. Aggregating before the split is the primary leakage source, and the
-    check is one line, so assert it is actually there.
-    """
-    raise NotImplementedError
+    with pytest.raises(ValueError, match="NULLIF"):
+        list(own_columns("bureau", bureau, feature_spec, 2))
+
+
+def test_generated_column_count_stays_inside_the_matrix_budget(feature_spec: FeatureSpec) -> None:
+    stage_ones = _stage_one_by_table(feature_spec)
+    generated = sum(
+        len(stage_two_columns(parent, feature_spec, stage_ones)) for parent in SECOND_LEVEL_TABLES
+    )
+
+    total = generated + len(feature_spec.application_ratios) + APPLICATION_COLUMN_ALLOWANCE
+
+    assert total <= MATRIX_COLUMN_BUDGET
+
+
+def test_manifest_records_provenance_for_every_column(
+    tmp_path: Path, silver_paths: dict[str, Path], feature_spec: FeatureSpec
+) -> None:
+    layout = _layout(tmp_path / "out", silver_paths)
+    build_features(layout, feature_spec, ("full",), expected_rows=APPLICATION_ROWS)
+
+    matrix_columns = list(pl.read_parquet_schema(layout.matrices["full"]))
+    manifest = json.loads(layout.manifests["full"].read_text(encoding="utf-8"))
+    recorded = [column["name"] for column in manifest["columns"]]
+
+    assert matrix_columns == recorded
+    assert manifest["column_count"] == len(recorded)
+    assert set(manifest["source_sha256"]) == set(silver_paths)
+
+
+def test_manifest_is_byte_identical_across_two_runs(
+    tmp_path: Path, silver_paths: dict[str, Path], feature_spec: FeatureSpec
+) -> None:
+    first = _layout(tmp_path / "first", silver_paths)
+    second = _layout(tmp_path / "second", silver_paths)
+
+    build_features(first, feature_spec, ("full",), expected_rows=APPLICATION_ROWS)
+    build_features(second, feature_spec, ("full",), expected_rows=APPLICATION_ROWS)
+
+    assert first.manifests["full"].read_bytes() == second.manifests["full"].read_bytes()
+    assert pl.read_parquet(first.matrices["full"]).equals(pl.read_parquet(second.matrices["full"]))
+
+
+def test_no_ext_source_configuration_excludes_the_columns(
+    tmp_path: Path, silver_paths: dict[str, Path], feature_spec: FeatureSpec
+) -> None:
+    configurations = ("full", "no_ext_source")
+    layout = _layout(tmp_path / "out", silver_paths, configurations)
+    build_features(layout, feature_spec, configurations, expected_rows=APPLICATION_ROWS)
+
+    full = pl.read_parquet_schema(layout.matrices["full"])
+    reduced = pl.read_parquet_schema(layout.matrices["no_ext_source"])
+
+    assert "EXT_SOURCE_1" in full
+    assert "FLAG_MISSING_EXT_SOURCE_1" in full
+    assert not [name for name in reduced if "EXT_SOURCE" in name]
+    excluded = feature_spec.configurations["no_ext_source"]["excluded_columns"]
+    assert len(full) - len(reduced) == len(excluded)
+
+
+def test_aggregation_requires_holdout_file_to_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(build, "holdout_ids_path", lambda: tmp_path / "missing.parquet")
+
+    with pytest.raises(FileNotFoundError, match="make split"):
+        build.run()
+
+    assert not list(tmp_path.iterdir())

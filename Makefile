@@ -45,9 +45,9 @@ split:
 
 features:
 	$(PY) -m hcr.features.build
-	$(PY) -m hcr.features.select
 
 gates:
+	$(PY) -m hcr.features.select
 	$(PY) -m hcr.quality.feature_gates
 	$(PY) -m hcr.quality.leakage_checks
 

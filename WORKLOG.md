@@ -38,12 +38,12 @@ Nói cách khác, khung đã dựng xong, việc còn lại là viết phần ru
 
 | # | Task | Cần xong trước | Lệnh chạy | Trạng thái |
 | --- | --- | --- | --- | --- |
-| 1 | Chuẩn bị môi trường | — | `make install`, `make check` | chưa |
-| 2 | Chuyển CSV sang Parquet | 1 | `make ingest` | chưa |
+| 1 | Chuẩn bị môi trường | — | `make install`, `make check` | xong |
+| 2 | Chuyển CSV sang Parquet | 1 | `make ingest` | xong |
 | 3 | Kiểm tra dữ liệu đầu vào | 2 | `make contracts` | xong |
-| 4 | Làm sạch dữ liệu | 3 | `make silver` | chưa |
-| 5 | Tách holdout | 4 | `make split` | chưa |
-| 6 | Tạo đặc trưng | **5** | `make features` | chưa |
+| 4 | Làm sạch dữ liệu | 3 | `make silver` | xong |
+| 5 | Tách holdout | 4 | `make split` | xong |
+| 6 | Tạo đặc trưng | **5** | `make features` | xong |
 | 7 | Lọc đặc trưng và chặn rò rỉ | 6 | `make gates` | chưa |
 | 8 | Mô hình mốc | 4 (và file tỷ lệ của Task 6) | `make train` | chưa |
 | 9 | Mô hình chính | **7**, 8 | `make train` | chưa |

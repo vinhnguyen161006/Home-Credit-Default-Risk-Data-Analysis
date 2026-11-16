@@ -33,6 +33,7 @@ FEATURES_DIR_NAME: Final = "features"
 MODELS_DIR_NAME: Final = "models"
 REPORTS_DIR_NAME: Final = "reports"
 FIGURES_DIR_NAME: Final = "figures"
+DUCKDB_TEMP_DIR_NAME: Final = "duckdb_tmp"
 
 HOLDOUT_IDS_FILENAME: Final = "holdout_ids.parquet"
 HOLDOUT_USAGE_FILENAME: Final = "holdout_usage.json"
@@ -160,6 +161,14 @@ def manifest_path(version: str, configuration: str) -> Path:
 def models_dir() -> Path:
     """Return the directory holding trained models and out-of-fold predictions."""
     return data_dir() / MODELS_DIR_NAME
+
+
+def duckdb_temp_dir() -> Path:
+    """Return the directory DuckDB spills to when an aggregation exceeds its memory limit.
+
+    Pinned inside the gitignored data root so a spill never fills the system temp volume.
+    """
+    return data_dir() / DUCKDB_TEMP_DIR_NAME
 
 
 def sql_dir() -> Path:

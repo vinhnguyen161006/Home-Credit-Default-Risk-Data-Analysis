@@ -67,7 +67,7 @@ sources:
     windowed: true
     derived:
       CREDIT_ACTIVE_IS_ACTIVE: CREDIT_ACTIVE = 'Active'
-      DEBT_CREDIT_RATIO: AMT_CREDIT_SUM_DEBT / AMT_CREDIT_SUM
+      DEBT_CREDIT_RATIO: AMT_CREDIT_SUM_DEBT / NULLIF(AMT_CREDIT_SUM, 0)
     aggregations:
       SK_ID_BUREAU: [count]
       AMT_CREDIT_SUM: [sum, mean, max, min, std]
@@ -90,7 +90,7 @@ sources:
     derived:
       STATUS_IS_REFUSED: NAME_CONTRACT_STATUS = 'Refused'
       STATUS_IS_APPROVED: NAME_CONTRACT_STATUS = 'Approved'
-      APPLICATION_CREDIT_RATIO: AMT_APPLICATION / AMT_CREDIT
+      APPLICATION_CREDIT_RATIO: AMT_APPLICATION / NULLIF(AMT_CREDIT, 0)
     aggregations:
       SK_ID_PREV: [count]
       AMT_APPLICATION: [sum, mean, max, min]
