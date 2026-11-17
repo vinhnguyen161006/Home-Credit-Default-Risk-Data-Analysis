@@ -26,6 +26,11 @@ Chạy `make serve` để tạo mart từ bảy Silver Parquet rồi nạp 13 b�
 `make`, chạy lần lượt `uv run python -m hcr.serving.build_star` và
 `uv run python -m hcr.serving.load_sqlserver`.
 
+Muốn chạy từng bước trong VS Code/Jupyter thay vì nhập lệnh, mở
+[`notebooks/04_serving_workflow.ipynb`](../notebooks/04_serving_workflow.ipynb). Chọn kernel `.venv`;
+notebook kiểm tra Silver files, dựng mart và kiểm tra kết nối. Xử lý raw CSV và publish vào SQL
+Server là các lựa chọn bật riêng; notebook không tự khởi động SQL Server.
+
 Trong Power BI Desktop, chọn **Get data → SQL Server**, nhập cùng host/port và database đã cấu hình,
 rồi chọn **Import**. Mart gồm:
 
