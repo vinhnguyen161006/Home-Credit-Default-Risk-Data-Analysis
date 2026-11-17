@@ -14,9 +14,11 @@ from hcr.config.environment import (
     ENV_MSSQL_HOST,
     ENV_MSSQL_PASSWORD,
     ENV_MSSQL_PORT,
+    ENV_MSSQL_TRUSTED_CONNECTION,
     mlflow_experiment_name,
     mlflow_tracking_uri,
     mssql_connection_string,
+    mssql_database_name,
 )
 from hcr.config.loaders import (
     EXPECTED_TABLES,
@@ -47,6 +49,7 @@ __all__ = [
     "ENV_MSSQL_HOST",
     "ENV_MSSQL_PASSWORD",
     "ENV_MSSQL_PORT",
+    "ENV_MSSQL_TRUSTED_CONNECTION",
     "EXPECTED_TABLES",
     "RANDOM_SEED_KEY",
     "ConfigError",
@@ -66,6 +69,7 @@ __all__ = [
     "mlflow_experiment_name",
     "mlflow_tracking_uri",
     "mssql_connection_string",
+    "mssql_database_name",
     "random_seed",
     "require_keys",
 ]

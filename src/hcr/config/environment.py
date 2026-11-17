@@ -28,6 +28,7 @@ ENV_MSSQL_HOST: Final = "MSSQL_HOST"
 ENV_MSSQL_PORT: Final = "MSSQL_PORT"
 ENV_MSSQL_DATABASE: Final = "MSSQL_DATABASE"
 ENV_MSSQL_PASSWORD: Final = "MSSQL_SA_PASSWORD"
+ENV_MSSQL_TRUSTED_CONNECTION: Final = "MSSQL_TRUSTED_CONNECTION"
 ENV_MLFLOW_URI: Final = "MLFLOW_TRACKING_URI"
 ENV_MLFLOW_EXPERIMENT: Final = "MLFLOW_EXPERIMENT_NAME"
 ENV_FILENAME: Final = ".env"
@@ -37,37 +38,73 @@ MSSQL_LOGIN: Final = "sa"
 DEFAULT_MLFLOW_URI: Final = "file:./mlruns"
 
 
-def mssql_connection_string(env_file: Path | None = None) -> str:
+def mssql_connection_string(
+    env_file: Path | None = None, database_override: str | None = None
+) -> str:
     """Build the SQL Server connection string from the environment.
 
-    Never falls back to a default password or port, because a silent default is
-    how a load lands in the wrong instance. The returned value holds the
-    password, so it is never logged; only host, port and database are.
+    SQL authentication is the default. Windows authentication is enabled with
+    MSSQL_TRUSTED_CONNECTION=true and never includes SQL credentials.
 
     Args:
         env_file: Override for the .env location, used by tests.
+        database_override: Database name for administrative connections.
 
     Raises:
-        ConfigError: If any of host, port, database or password is absent, or
-            the port is not an integer.
+        ConfigError: If required connection settings are absent, authentication
+            settings are invalid, or the port is not an integer.
     """
     environment = _read_environment(env_file)
-    required_names = (ENV_MSSQL_HOST, ENV_MSSQL_PORT, ENV_MSSQL_DATABASE, ENV_MSSQL_PASSWORD)
+    required_names = (ENV_MSSQL_HOST, ENV_MSSQL_PORT, ENV_MSSQL_DATABASE)
     missing_names = [name for name in required_names if not environment.get(name)]
     if missing_names:
         raise ConfigError(f"Missing environment variables: {', '.join(missing_names)}")
 
     host = environment[ENV_MSSQL_HOST]
     port = environment[ENV_MSSQL_PORT]
-    database = environment[ENV_MSSQL_DATABASE]
+    database = database_override or environment[ENV_MSSQL_DATABASE]
     if not port.isdigit():
         raise ConfigError(f"{ENV_MSSQL_PORT} must be an integer, got {port!r}")
 
     logger.info("Resolved SQL Server target %s:%s/%s", host, port, database)
-    return (
-        f"DRIVER={{{MSSQL_ODBC_DRIVER}}};SERVER={host},{port};DATABASE={database};"
-        f"UID={MSSQL_LOGIN};PWD={environment[ENV_MSSQL_PASSWORD]};TrustServerCertificate=yes"
+    connection_string = (
+        f"DRIVER={{{MSSQL_ODBC_DRIVER}}};SERVER={host},{port};"
+        f"DATABASE={_odbc_braced_value(database)};"
     )
+    if _trusted_connection_enabled(environment):
+        return connection_string + "Trusted_Connection=yes;TrustServerCertificate=yes"
+
+    password = environment.get(ENV_MSSQL_PASSWORD)
+    if not password:
+        raise ConfigError(
+            f"Missing environment variable: {ENV_MSSQL_PASSWORD}; "
+            f"or set {ENV_MSSQL_TRUSTED_CONNECTION}=true"
+        )
+    return (
+        connection_string
+        + f"UID={MSSQL_LOGIN};PWD={_odbc_braced_value(password)};TrustServerCertificate=yes"
+    )
+
+
+def _trusted_connection_enabled(environment: dict[str, str]) -> bool:
+    value = environment.get(ENV_MSSQL_TRUSTED_CONNECTION, "false").strip().casefold()
+    if value in {"true", "yes", "1"}:
+        return True
+    if value in {"false", "no", "0"}:
+        return False
+    raise ConfigError(f"{ENV_MSSQL_TRUSTED_CONNECTION} must be true or false, got {value!r}")
+
+
+def _odbc_braced_value(value: str) -> str:
+    return "{" + value.replace("}", "}}") + "}"
+
+
+def mssql_database_name(env_file: Path | None = None) -> str:
+    """Return the configured SQL Server database name."""
+    database = _read_environment(env_file).get(ENV_MSSQL_DATABASE)
+    if not database:
+        raise ConfigError(f"Missing environment variable: {ENV_MSSQL_DATABASE}")
+    return database
 
 
 def mlflow_tracking_uri(env_file: Path | None = None) -> str:
